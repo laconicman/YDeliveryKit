@@ -1,0 +1,118 @@
+import SFSafeSymbols
+import SwiftUI
+
+/// The one rendering of an order's status: color, glyph, and words, always together —
+/// a status color never appears without its glyph and its words (DesignSystem →
+/// "Semantic colors"), so removing color costs nothing.
+///
+/// A `ViewThatFits` candidate list per DESIGN-HANDOFF §6, authored most complete first;
+/// the last candidate is the irreducible minimum, which still carries glyph and words —
+/// only type size and padding may shrink.
+public struct StatusChip: View {
+    let status: OrderStatus
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    public init(status: OrderStatus) {
+        self.status = status
+    }
+
+    public var body: some View {
+        ViewThatFits(in: .horizontal) {
+            label(font: .footnote, padding: EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10))
+            label(font: .caption2, padding: EdgeInsets(top: 3, leading: 7, bottom: 3, trailing: 7))
+        }
+    }
+
+    private func label(font: Font, padding: EdgeInsets) -> some View {
+        Label {
+            Text(status.words)
+        } icon: {
+            if let symbol = status.symbol {
+                Image(systemSymbol: symbol)
+                    // The searching glyph is the spinner: the one genuinely indeterminate
+                    // wait (DesignSystem → "Motion"). Reduce Motion: static glyph + words.
+                    .symbolEffect(
+                        .variableColor,
+                        isActive: status == .searching && !reduceMotion
+                    )
+            }
+        }
+        .font(font.weight(.medium))
+        .foregroundStyle(foreground)
+        .padding(padding)
+        .background(background, in: Capsule())
+    }
+
+    /// Draft is the one status whose token is a *fill*, not a text color — «Черновик» has
+    /// no color of its own to speak in, so the words render as secondary text on the
+    /// neutral capsule. Every other status speaks in its color, on a whisper of itself.
+    private var foreground: AnyShapeStyle {
+        status == .draft ? AnyShapeStyle(.secondary) : AnyShapeStyle(status.color)
+    }
+
+    private var background: AnyShapeStyle {
+        status == .draft ? AnyShapeStyle(status.color) : AnyShapeStyle(status.color.opacity(0.12))
+    }
+}
+
+extension OrderStatus {
+    /// The semantic token behind this status (DesignSystem color table). Compile-time
+    /// symbols from the package's catalog: a typo is a build error, not a blank widget.
+    var color: Color {
+        switch self {
+        case .draft: Color(.statusDraft)
+        case .searching: Color(.statusSearching)
+        case .active: Color(.statusActive)
+        case .done: Color(.statusDone)
+        case .attention: Color(.statusAttention)
+        case .cancelled: Color(.statusCancelled)
+        }
+    }
+
+    /// The paired glyph — `nil` only for draft, whose table row is "— · «Черновик»".
+    var symbol: SFSymbol? {
+        switch self {
+        case .draft: nil
+        case .searching: .circleDotted
+        case .active: .recordCircle
+        case .done: .checkmark
+        case .attention: .exclamationmarkTriangleFill
+        case .cancelled: .xmark
+        }
+    }
+
+    /// The paired words. Localized in the package bundle so every consumer — app, widget,
+    /// notification — says exactly the same thing.
+    var words: LocalizedStringResource {
+        switch self {
+        case .draft: LocalizedStringResource("Draft", bundle: .kit)
+        case .searching: LocalizedStringResource("Finding a courier", bundle: .kit)
+        case .active: LocalizedStringResource("Courier on the way", bundle: .kit)
+        case .done: LocalizedStringResource("Delivered", bundle: .kit)
+        case .attention: LocalizedStringResource("Not delivered", bundle: .kit)
+        case .cancelled: LocalizedStringResource("Cancelled", bundle: .kit)
+        }
+    }
+}
+
+private extension LocalizedStringResource.BundleDescription {
+    /// The package's own bundle — `LocalizedStringResource` cannot take `Bundle.module`
+    /// directly, only a description of where to find it.
+    nonisolated static let kit = atURL(Bundle.module.bundleURL)
+}
+
+#Preview("All statuses") {
+    VStack(alignment: .leading, spacing: 12) {
+        ForEach(OrderStatus.allCases, id: \.self) { status in
+            StatusChip(status: status)
+        }
+    }
+    .padding()
+}
+
+#Preview("Tight fit falls back, never drops words") {
+    StatusChip(status: .searching)
+        .frame(width: 96)
+        .padding()
+}
