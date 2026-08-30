@@ -21,10 +21,6 @@ import Foundation
 /// `@Observable` controller that owns an instance arrives with the first screen that
 /// renders orders (Phase 2).
 public nonisolated struct OrderStore: Sendable {
-    /// One group, shared by the app and every future extension target. The suffix
-    /// matches the app's bundle identifier.
-    public static let appGroupID = "group.com.learnable.YDelivery"
-
     private let fileURL: URL
 
     /// A store rooted in the given directory. Injectable so tests write into a
@@ -38,7 +34,7 @@ public nonisolated struct OrderStore: Sendable {
     /// for the caller to render, never a crash (CLAUDE.md rule 3).
     public static func inAppGroup(fileManager: FileManager = .default) -> OrderStore? {
         fileManager
-            .containerURL(forSecurityApplicationGroupIdentifier: appGroupID)
+            .containerURL(forSecurityApplicationGroupIdentifier: AppGroup.id)
             .map(OrderStore.init(directory:))
     }
 
