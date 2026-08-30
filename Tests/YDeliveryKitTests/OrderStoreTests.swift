@@ -55,6 +55,31 @@ struct OrderStoreTests {
         #expect(store.read() == [second, first])
     }
 
+    @Test("Creation times round-trip exactly, sub-second precision included")
+    func datePrecisionSurvives() throws {
+        var order = sampleOrder
+        order.created = Date(timeIntervalSinceReferenceDate: 778_467_721.834213)
+        try store.record(order)
+        #expect(store.read() == [order])
+    }
+
+    @Test("Concurrent writers all land — no lost updates")
+    func concurrentWritersAllLand() async throws {
+        let orders = (0..<16).map { offset in
+            var order = sampleOrder
+            order.id = UUID()
+            order.created = sampleOrder.created.addingTimeInterval(Double(offset))
+            return order
+        }
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for order in orders {
+                group.addTask { [store] in try store.record(order) }
+            }
+            try await group.waitForAll()
+        }
+        #expect(Set(store.read().map(\.id)) == Set(orders.map(\.id)))
+    }
+
     @Test("A corrupt file reads as empty and is not destroyed")
     func corruptFileReadsEmptyAndSurvives() throws {
         let fileURL = directory.appendingPathComponent("orders.json")

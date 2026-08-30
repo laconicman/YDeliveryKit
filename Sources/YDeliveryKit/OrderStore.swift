@@ -11,6 +11,11 @@ import Foundation
 /// (the app's <doc:Roadmap>) replaces the format; `Order`'s spine and this type's
 /// *location* are what survive it.
 ///
+/// Reads and writes run under `NSFileCoordinator`: the file is shared with future
+/// extension processes (widget, share-in), and coordination is what makes the
+/// read-prepend-replace in ``record(_:)`` one transaction across threads *and*
+/// processes — `.atomic` alone only prevents torn files, not lost updates.
+///
 /// `nonisolated`, like the app's `TokenStore`: no UI affinity, no in-memory state — a
 /// widget timeline or background refresh reads it off the main actor. The app-side
 /// `@Observable` controller that owns an instance arrives with the first screen that
@@ -41,30 +46,51 @@ public nonisolated struct OrderStore: Sendable {
     /// history. A corrupt file also reads as empty rather than crashing; the bytes stay
     /// on disk untouched until the next `record`, so nothing is destroyed silently.
     public func read() -> [Order] {
-        guard let data = try? Data(contentsOf: fileURL) else { return [] }
-        return (try? Self.decoder.decode([Order].self, from: data)) ?? []
+        var orders: [Order] = []
+        NSFileCoordinator().coordinate(readingItemAt: fileURL, options: [], error: nil) { url in
+            orders = Self.decode(from: url)
+        }
+        return orders
     }
 
-    /// Appends one order and persists the whole set atomically. Throws rather than
-    /// degrading silently — history that did not persist is a state the caller must see.
+    /// Appends one order and persists the whole set atomically, under write coordination
+    /// so concurrent writers queue instead of overwriting each other's history. Throws
+    /// rather than degrading silently — history that did not persist is a state the
+    /// caller must see.
     public func record(_ order: Order) throws {
-        let orders = [order] + read()
-        let data = try Self.encoder.encode(orders)
-        try data.write(to: fileURL, options: .atomic)
+        var coordinationError: NSError?
+        var accessError: (any Error)?
+        NSFileCoordinator().coordinate(
+            writingItemAt: fileURL,
+            options: .forMerging,
+            error: &coordinationError
+        ) { url in
+            do {
+                let data = try Self.encoder.encode([order] + Self.decode(from: url))
+                try data.write(to: url, options: .atomic)
+            } catch {
+                accessError = error
+            }
+        }
+        if let coordinationError { throw coordinationError }
+        if let accessError { throw accessError }
     }
 
-    /// ISO 8601 dates and sorted keys: the file stays diffable and stable across runs —
-    /// it will be migrated by hand exactly once, when the Phase-2 stack lands.
+    private static func decode(from url: URL) -> [Order] {
+        guard let data = try? Data(contentsOf: url) else { return [] }
+        return (try? decoder.decode([Order].self, from: data)) ?? []
+    }
+
+    /// Sorted keys keep the file diffable and stable across runs — it will be migrated
+    /// by hand exactly once, when the Phase-2 stack lands. Dates stay Foundation's
+    /// native seconds-since-reference doubles: exact round-trip beats a readable
+    /// timestamp in a file only machines read — ISO 8601 truncates sub-second precision,
+    /// and a stored order must compare equal to the one that was recorded.
     private static let encoder: JSONEncoder = {
         let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
         return encoder
     }()
 
-    private static let decoder: JSONDecoder = {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return decoder
-    }()
+    private static let decoder = JSONDecoder()
 }
