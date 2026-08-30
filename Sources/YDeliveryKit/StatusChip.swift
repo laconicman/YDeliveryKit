@@ -103,12 +103,6 @@ extension OrderStatus {
     }
 }
 
-private extension LocalizedStringResource.BundleDescription {
-    /// The package's own bundle — `LocalizedStringResource` cannot take `Bundle.module`
-    /// directly, only a description of where to find it.
-    nonisolated static let kit = atURL(Bundle.module.bundleURL)
-}
-
 #Preview("All statuses") {
     VStack(alignment: .leading, spacing: 12) {
         ForEach(OrderStatus.allCases, id: \.self) { status in
