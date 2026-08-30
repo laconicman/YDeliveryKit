@@ -7,7 +7,7 @@ import SwiftUI
 ///
 /// A `ViewThatFits` candidate list per DESIGN-HANDOFF §6, authored most complete first;
 /// the last candidate is the irreducible minimum, which still carries glyph and words —
-/// only type size and padding may shrink.
+/// type and padding shrink first, and past that the words wrap. Nothing truncates.
 public struct StatusChip: View {
     let status: OrderStatus
 
@@ -20,6 +20,10 @@ public struct StatusChip: View {
     public var body: some View {
         ViewThatFits(in: .horizontal) {
             label(font: .footnote, padding: EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10))
+            // Doubles as the overflow strategy: when even this candidate cannot fit —
+            // long translations, accessibility sizes, a narrow widget — ViewThatFits
+            // still renders it, width-constrained, and the unlimited line count lets
+            // the words wrap. The chip grows down rather than dropping its words.
             label(font: .caption2, padding: EdgeInsets(top: 3, leading: 7, bottom: 3, trailing: 7))
         }
     }
@@ -114,5 +118,11 @@ private extension LocalizedStringResource.BundleDescription {
 #Preview("Tight fit falls back, never drops words") {
     StatusChip(status: .searching)
         .frame(width: 96)
+        .padding()
+}
+
+#Preview("Overflow wraps, never truncates") {
+    StatusChip(status: .active)
+        .frame(width: 64)
         .padding()
 }
