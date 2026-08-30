@@ -90,6 +90,31 @@ struct OrderStoreTests {
         #expect(try Data(contentsOf: fileURL) == garbage, "reading must never rewrite the evidence")
     }
 
+    @Test("Recording over corrupt history rescues it aside, byte for byte")
+    func recordingRescuesCorruptHistory() throws {
+        let garbage = Data("not json".utf8)
+        try garbage.write(to: directory.appendingPathComponent("orders.json"))
+
+        let order = sampleOrder
+        try store.record(order)
+
+        #expect(try store.read() == [order])
+        let rescued = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix("orders.corrupted-") }
+        #expect(rescued.count == 1)
+        #expect(try Data(contentsOf: #require(rescued.first)) == garbage,
+                "recording must move the evidence aside, never overwrite it")
+    }
+
+    @Test("An unreadable file throws — could not look is not nothing there")
+    func unreadableFileThrows() throws {
+        let fileURL = directory.appendingPathComponent("orders.json")
+        try Data("[]".utf8).write(to: fileURL)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: fileURL.path)
+
+        #expect(throws: (any Error).self) { try store.read() }
+    }
+
     @Test("Statuses persist as stable strings, not case positions")
     func statusWireFormatIsStable() throws {
         try store.record(sampleOrder)
