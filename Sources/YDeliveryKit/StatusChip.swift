@@ -42,7 +42,10 @@ public struct StatusChip: View {
                     )
             }
         }
-        .font(font.weight(.medium))
+        // Cancelled recedes at regular weight: its AA-darkened value must not read as
+        // prominence — recession comes from the neutral tint and the weight, and the
+        // ✕ plus the word are what separate it from draft (designer, 2026-08-30).
+        .font(font.weight(status == .cancelled ? .regular : .medium))
         .foregroundStyle(foreground)
         .padding(padding)
         .background(background, in: Capsule())
