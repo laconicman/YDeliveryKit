@@ -32,15 +32,15 @@ struct OrderStoreTests {
     }
 
     @Test("An empty store reads as no history, not an error")
-    func absentFileReadsEmpty() {
-        #expect(store.read().isEmpty)
+    func absentFileReadsEmpty() throws {
+        #expect(try store.read().isEmpty)
     }
 
     @Test("An order round-trips whole: route, contacts, status, creation date")
     func roundTrip() throws {
         let order = sampleOrder
         try store.record(order)
-        #expect(store.read() == [order])
+        #expect(try store.read() == [order])
     }
 
     @Test("Recording keeps earlier orders, newest first")
@@ -52,7 +52,7 @@ struct OrderStoreTests {
 
         try store.record(first)
         try store.record(second)
-        #expect(store.read() == [second, first])
+        #expect(try store.read() == [second, first])
     }
 
     @Test("Creation times round-trip exactly, sub-second precision included")
@@ -60,7 +60,7 @@ struct OrderStoreTests {
         var order = sampleOrder
         order.created = Date(timeIntervalSinceReferenceDate: 778_467_721.834213)
         try store.record(order)
-        #expect(store.read() == [order])
+        #expect(try store.read() == [order])
     }
 
     @Test("Concurrent writers all land — no lost updates")
@@ -77,7 +77,7 @@ struct OrderStoreTests {
             }
             try await group.waitForAll()
         }
-        #expect(Set(store.read().map(\.id)) == Set(orders.map(\.id)))
+        #expect(Set(try store.read().map(\.id)) == Set(orders.map(\.id)))
     }
 
     @Test("A corrupt file reads as empty and is not destroyed")
@@ -86,7 +86,7 @@ struct OrderStoreTests {
         let garbage = Data("not json".utf8)
         try garbage.write(to: fileURL)
 
-        #expect(store.read().isEmpty)
+        #expect(try store.read().isEmpty)
         #expect(try Data(contentsOf: fileURL) == garbage, "reading must never rewrite the evidence")
     }
 

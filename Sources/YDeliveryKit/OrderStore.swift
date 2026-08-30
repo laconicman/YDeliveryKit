@@ -45,11 +45,21 @@ public nonisolated struct OrderStore: Sendable {
     /// Every stored order, newest first. Absence reads as empty — a first launch has no
     /// history. A corrupt file also reads as empty rather than crashing; the bytes stay
     /// on disk untouched until the next `record`, so nothing is destroyed silently.
-    public func read() -> [Order] {
+    ///
+    /// Throws only when coordination itself fails: *could not look* is not *nothing
+    /// there*, and history rendering as suddenly empty would be a lie. The caller
+    /// renders the failure (CLAUDE.md rule 3).
+    public func read() throws -> [Order] {
+        var coordinationError: NSError?
         var orders: [Order] = []
-        NSFileCoordinator().coordinate(readingItemAt: fileURL, options: [], error: nil) { url in
+        NSFileCoordinator().coordinate(
+            readingItemAt: fileURL,
+            options: [],
+            error: &coordinationError
+        ) { url in
             orders = Self.decode(from: url)
         }
+        if let coordinationError { throw coordinationError }
         return orders
     }
 
