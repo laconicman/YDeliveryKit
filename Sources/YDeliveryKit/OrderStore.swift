@@ -43,30 +43,35 @@ public nonisolated struct OrderStore: Sendable {
     }
 
     /// Every stored order, newest first. Absence reads as empty — a first launch has no
-    /// history. A corrupt file also reads as empty rather than crashing; the bytes stay
-    /// on disk untouched until the next `record`, so nothing is destroyed silently.
+    /// history. A malformed file also reads as empty rather than crashing; its bytes are
+    /// never touched by reading, and ``record(_:)`` rescues them aside rather than
+    /// overwriting, so nothing is destroyed silently.
     ///
-    /// Throws only when coordination itself fails: *could not look* is not *nothing
-    /// there*, and history rendering as suddenly empty would be a lie. The caller
-    /// renders the failure (CLAUDE.md rule 3).
+    /// Throws when coordination fails *or the file exists but cannot be read* (I/O,
+    /// permissions): *could not look* is not *nothing there*, and history rendering as
+    /// suddenly empty would be a lie. The caller renders the failure (CLAUDE.md rule 3).
     public func read() throws -> [Order] {
         var coordinationError: NSError?
-        var orders: [Order] = []
+        var outcome: Result<Stored, any Error> = .success(.absent)
         NSFileCoordinator().coordinate(
             readingItemAt: fileURL,
             options: [],
             error: &coordinationError
         ) { url in
-            orders = Self.decode(from: url)
+            outcome = Result { try Self.load(from: url) }
         }
         if let coordinationError { throw coordinationError }
-        return orders
+        switch try outcome.get() {
+        case .absent, .malformed: return []
+        case .orders(let orders): return orders
+        }
     }
 
     /// Appends one order and persists the whole set atomically, under write coordination
-    /// so concurrent writers queue instead of overwriting each other's history. Throws
-    /// rather than degrading silently — history that did not persist is a state the
-    /// caller must see.
+    /// so concurrent writers queue instead of overwriting each other's history. Existing
+    /// history it cannot decode is moved aside as `orders.corrupted-<t>.json` — recording
+    /// stays possible, and the evidence stays recoverable. Throws rather than degrading
+    /// silently — history that did not persist is a state the caller must see.
     public func record(_ order: Order) throws {
         var coordinationError: NSError?
         var accessError: (any Error)?
@@ -76,7 +81,17 @@ public nonisolated struct OrderStore: Sendable {
             error: &coordinationError
         ) { url in
             do {
-                let data = try Self.encoder.encode([order] + Self.decode(from: url))
+                let existing: [Order]
+                switch try Self.load(from: url) {
+                case .absent:
+                    existing = []
+                case .orders(let orders):
+                    existing = orders
+                case .malformed:
+                    try Self.rescueCorruptFile(at: url)
+                    existing = []
+                }
+                let data = try Self.encoder.encode([order] + existing)
                 try data.write(to: url, options: .atomic)
             } catch {
                 accessError = error
@@ -86,9 +101,34 @@ public nonisolated struct OrderStore: Sendable {
         if let accessError { throw accessError }
     }
 
-    private static func decode(from url: URL) -> [Order] {
-        guard let data = try? Data(contentsOf: url) else { return [] }
-        return (try? decoder.decode([Order].self, from: data)) ?? []
+    /// What the file held: distinguishing *nothing there* from *unreadable as orders* —
+    /// the two must never collapse into one another (review, PR #12).
+    private enum Stored {
+        case absent
+        case orders([Order])
+        case malformed
+    }
+
+    private static func load(from url: URL) throws -> Stored {
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            return .absent
+        }
+        guard let orders = try? decoder.decode([Order].self, from: data) else {
+            return .malformed
+        }
+        return .orders(orders)
+    }
+
+    /// Moves undecodable history aside, timestamped, in the same directory. A same-second
+    /// collision makes the move — and with it the `record` — throw, which still loses
+    /// nothing.
+    private static func rescueCorruptFile(at url: URL) throws {
+        let rescueName = "orders.corrupted-\(Int(Date.now.timeIntervalSince1970)).json"
+        let rescueURL = url.deletingLastPathComponent().appendingPathComponent(rescueName)
+        try FileManager.default.moveItem(at: url, to: rescueURL)
     }
 
     /// Sorted keys keep the file diffable and stable across runs — it will be migrated
