@@ -14,22 +14,31 @@ public nonisolated struct RoutePoint: Codable, Hashable, Sendable {
     /// geocoder's proposal, and that correction is exactly what must survive.
     public var address: String
 
-    /// Who hands over or receives at this stop. Optional: the shipped draft flow does
-    /// not collect contacts yet (Roadmap → Phase 2 puts them on the draft screen).
+    /// How to get to the door once at the building. Optional and additive: files
+    /// written before this field decode with it absent.
+    public var addressParts: AddressParts?
+
+    /// Who hands over or receives at this stop.
     public var contactName: String?
     public var contactPhone: String?
+    /// Dialled after the phone connects — its own field, never folded into the number.
+    public var contactPhoneExtension: String?
 
     public init(
         latitude: Double,
         longitude: Double,
         address: String,
+        addressParts: AddressParts? = nil,
         contactName: String? = nil,
-        contactPhone: String? = nil
+        contactPhone: String? = nil,
+        contactPhoneExtension: String? = nil
     ) {
         self.latitude = latitude
         self.longitude = longitude
         self.address = address
+        self.addressParts = addressParts
         self.contactName = contactName
         self.contactPhone = contactPhone
+        self.contactPhoneExtension = contactPhoneExtension
     }
 }
