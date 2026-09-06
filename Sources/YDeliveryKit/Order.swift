@@ -20,10 +20,35 @@ public nonisolated struct Order: Codable, Hashable, Identifiable, Sendable {
     /// Pickup first, drop-offs after, in travel order.
     public var route: [RoutePoint]
 
-    public init(id: UUID = UUID(), created: Date, status: OrderStatus, route: [RoutePoint]) {
+    /// The accepted price, in minor-precision decimal string form exactly as agreed —
+    /// additive (Phase-2 slice 6); rows written before it still decode.
+    public var price: String?
+    public var currency: String?
+
+    /// The delivery class the order was placed with, in the wire's spelling.
+    public var tariff: String?
+
+    /// The vendor's claim id — kept for the journal to match against (Phase 3), never
+    /// shown above the sender's own vocabulary.
+    public var claimID: String?
+
+    public init(
+        id: UUID = UUID(),
+        created: Date,
+        status: OrderStatus,
+        route: [RoutePoint],
+        price: String? = nil,
+        currency: String? = nil,
+        tariff: String? = nil,
+        claimID: String? = nil
+    ) {
         self.id = id
         self.created = created
         self.status = status
         self.route = route
+        self.price = price
+        self.currency = currency
+        self.tariff = tariff
+        self.claimID = claimID
     }
 }

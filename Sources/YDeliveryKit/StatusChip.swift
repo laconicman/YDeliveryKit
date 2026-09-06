@@ -66,7 +66,9 @@ public struct StatusChip: View {
 extension OrderStatus {
     /// The semantic token behind this status (DesignSystem color table). Compile-time
     /// symbols from the package's catalog: a typo is a build error, not a blank widget.
-    var color: Color {
+    /// Public: the set lives in the shared package precisely so every consumer speaks
+    /// the same green — the chip is the usual voice, this is the raw token.
+    public var color: Color {
         switch self {
         case .draft: Color(.statusDraft)
         case .searching: Color(.statusSearching)
