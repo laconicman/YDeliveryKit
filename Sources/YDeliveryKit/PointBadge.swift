@@ -42,12 +42,16 @@ public struct PointBadge: View {
         self.role = role
     }
 
+    /// The two candidates' sizes — the board's row mark, and the dense-row minimum.
+    private static let regularDiameter: CGFloat = 22
+    private static let compactDiameter: CGFloat = 14
+
     public var body: some View {
         ViewThatFits {
-            mark(diameter: 22)
+            mark(diameter: Self.regularDiameter)
             // The irreducible minimum: the same shape and glyph, compact — for dense
             // rows (history cards, widget lines). Never a letter, never color alone.
-            mark(diameter: 14)
+            mark(diameter: Self.compactDiameter)
         }
         .accessibilityLabel(Text(role.words))
     }
