@@ -7,7 +7,7 @@ import SwiftUI
 /// is what makes the route list the map's legend. On a map, anchor the annotation at
 /// ``Role/mapAnchor`` — the teardrop's tip is the coordinate.
 ///
-/// A `ViewThatFits` candidate list per DESIGN-HANDOFF §6, authored most complete first:
+/// A `ViewThatFits` candidate list (decision #31), authored most complete first:
 /// the regular mark, then the compact mark as the irreducible minimum for tight rows.
 /// The mark does not scale with type — at accessibility sizes the row grows and the glyph
 /// keeps its size (board `3f`, the reflow ladder), which is why neither candidate reads

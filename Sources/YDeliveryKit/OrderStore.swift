@@ -4,7 +4,7 @@ import Foundation
 /// saved places, and repeat-order all read (Design → "A point carries data, not
 /// coordinates"). Lives in the App Group container from day one so widgets read it
 /// directly; retrofitting that later is the expensive version of this decision
-/// (DESIGN-HANDOFF §6).
+/// (Design → "A point carries data, not coordinates"; the App-Group decision).
 ///
 /// **Provisional by design.** One JSON file, atomically replaced on write: the cheapest
 /// stack that makes the App Group location real. The Phase-2 schema-and-stack research

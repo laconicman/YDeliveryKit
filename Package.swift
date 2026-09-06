@@ -1,7 +1,8 @@
 // swift-tools-version: 6.2
 
 // The shared foundation below the app and the future widget/Live Activity targets, which
-// cannot import the app (DESIGN-HANDOFF §6). Membership test for anything added here:
+// cannot import the app (Design → the shared-package decision). Membership test for
+// anything added here:
 // does it render from plain values, with no controller, no network, no environment?
 //
 // The Swift settings mirror the app target (project.yml): same language mode, MainActor

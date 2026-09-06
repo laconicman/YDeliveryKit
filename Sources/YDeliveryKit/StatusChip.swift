@@ -5,7 +5,7 @@ import SwiftUI
 /// a status color never appears without its glyph and its words (DesignSystem →
 /// "Semantic colors"), so removing color costs nothing.
 ///
-/// A `ViewThatFits` candidate list per DESIGN-HANDOFF §6, authored most complete first;
+/// A `ViewThatFits` candidate list (decision #31), authored most complete first;
 /// the last candidate is the irreducible minimum, which still carries glyph and words —
 /// type and padding shrink first, and past that the words wrap. Nothing truncates.
 public struct StatusChip: View {
