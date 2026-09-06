@@ -87,7 +87,11 @@ public nonisolated struct OrderStore: Sendable {
                     try Self.rescueCorruptFile(at: url)
                     existing = []
                 }
-                let data = try Self.encoder.encode([order] + existing)
+                // Idempotent by id: recording is driven by observing a placed order, and
+                // anything that observes it twice — reopening a parked draft, a task
+                // re-run — must not prepend a second row for one delivery (review,
+                // PR #22). The newest wins, so a re-record updates rather than duplicates.
+                let data = try Self.encoder.encode([order] + existing.filter { $0.id != order.id })
                 try data.write(to: url, options: .atomic)
             } catch {
                 accessError = error
