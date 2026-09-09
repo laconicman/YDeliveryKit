@@ -17,11 +17,12 @@ public nonisolated struct SavedPlaceStore: Sendable {
         fileURL = directory.appendingPathComponent("places.json")
     }
 
-    /// The store every production reader shares. `nil` when the container cannot be
+    /// The store every production reader shares. The App Group is the consuming app's
+    /// to name; this package serves any of them. `nil` when the container cannot be
     /// resolved — a state for the caller to render, never a crash.
-    public static func inAppGroup(fileManager: FileManager = .default) -> SavedPlaceStore? {
+    public static func inAppGroup(id: String, fileManager: FileManager = .default) -> SavedPlaceStore? {
         fileManager
-            .containerURL(forSecurityApplicationGroupIdentifier: AppGroup.id)
+            .containerURL(forSecurityApplicationGroupIdentifier: id)
             .map(SavedPlaceStore.init(directory:))
     }
 

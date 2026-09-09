@@ -29,12 +29,13 @@ public nonisolated struct OrderStore: Sendable {
         fileURL = directory.appendingPathComponent("orders.json")
     }
 
-    /// The store every production reader shares — app, widget, activity. `nil` when the
+    /// The store every production reader shares — app, widget, activity. The App Group
+    /// is the consuming app's to name; this package serves any of them. `nil` when the
     /// container cannot be resolved (entitlement missing or not yet provisioned): a state
-    /// for the caller to render, never a crash (CLAUDE.md rule 3).
-    public static func inAppGroup(fileManager: FileManager = .default) -> OrderStore? {
+    /// for the caller to render, never a crash.
+    public static func inAppGroup(id: String, fileManager: FileManager = .default) -> OrderStore? {
         fileManager
-            .containerURL(forSecurityApplicationGroupIdentifier: AppGroup.id)
+            .containerURL(forSecurityApplicationGroupIdentifier: id)
             .map(OrderStore.init(directory:))
     }
 
