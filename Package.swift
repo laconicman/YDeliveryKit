@@ -1,9 +1,11 @@
 // swift-tools-version: 6.2
 
-// The shared foundation below the app and the future widget/Live Activity targets, which
-// cannot import the app (Design → the shared-package decision). Membership test for
-// anything added here:
-// does it render from plain values, with no controller, no network, no environment?
+// The shared foundation below the app and the future widget/Live Activity targets.
+// The membership test for anything added here, canonical across README and REVIEW.md:
+// code an extension target needs, which cannot import the app. Its practical corollary
+// for views: does it render from plain values — no controller, no network, no
+// environment? (The wiki once quoted the corollary as the test; it is the consequence,
+// not the criterion.)
 //
 // The Swift settings mirror the app target (project.yml): same language mode, MainActor
 // default isolation, and the Approachable Concurrency features the app compiles with —

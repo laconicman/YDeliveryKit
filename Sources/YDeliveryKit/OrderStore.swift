@@ -66,7 +66,7 @@ public nonisolated struct OrderStore: Sendable {
 
     /// Appends one order and persists the whole set atomically, under write coordination
     /// so concurrent writers queue instead of overwriting each other's history. Existing
-    /// history it cannot decode is moved aside as `orders.corrupted-<t>.json` — recording
+    /// history it cannot decode is moved aside as `orders.corrupted-<t>-<id>.json` — recording
     /// stays possible, and the evidence stays recoverable. Throws rather than degrading
     /// silently — history that did not persist is a state the caller must see.
     public func record(_ order: Order) throws {
@@ -123,11 +123,13 @@ public nonisolated struct OrderStore: Sendable {
         return .orders(orders)
     }
 
-    /// Moves undecodable history aside, timestamped, in the same directory. A same-second
-    /// collision makes the move — and with it the `record` — throw, which still loses
-    /// nothing.
+    /// Moves undecodable history aside, timestamped and collision-proof, in the same
+    /// directory.
     private static func rescueCorruptFile(at url: URL) throws {
-        let rescueName = "orders.corrupted-\(Int(Date.now.timeIntervalSince1970)).json"
+        // Sub-second uniqueness: two rescues in one second must both land — a name
+        // collision would fail the very write that tried to preserve the evidence
+        // (DeepWiki audit, 2026-09-13).
+        let rescueName = "orders.corrupted-\(Date.now.timeIntervalSince1970)-\(UUID().uuidString.prefix(8)).json"
         let rescueURL = url.deletingLastPathComponent().appendingPathComponent(rescueName)
         try FileManager.default.moveItem(at: url, to: rescueURL)
     }

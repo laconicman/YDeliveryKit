@@ -123,3 +123,24 @@ struct OrderStoreTests {
         #expect(text.contains(#""status" : "done""#))
     }
 }
+
+extension OrderStoreTests {
+    @Test("Two rescues in one second both land — the evidence never blocks the write")
+    func sameSecondRescuesDoNotCollide() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let store = OrderStore(directory: directory)
+        let file = directory.appendingPathComponent("orders.json")
+
+        // Corrupt → write → corrupt → write, faster than one second.
+        try Data("not json".utf8).write(to: file)
+        try store.record(Order(created: .now, status: .searching, route: []))
+        try Data("still not json".utf8).write(to: file)
+        try store.record(Order(created: .now, status: .searching, route: []))
+
+        let sidecars = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+            .filter { $0.hasPrefix("orders.corrupted-") }
+        #expect(sidecars.count == 2, "both rescues kept their evidence (DeepWiki audit, 2026-09-13)")
+    }
+}

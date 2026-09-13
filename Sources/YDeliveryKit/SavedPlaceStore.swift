@@ -48,7 +48,7 @@ public nonisolated struct SavedPlaceStore: Sendable {
 
     /// Inserts or updates one place (by id) and persists the whole set atomically,
     /// under write coordination. Undecodable history moves aside as
-    /// `places.corrupted-<t>.json`; saving stays possible, the evidence recoverable.
+    /// `places.corrupted-<t>-<id>.json`; saving stays possible, the evidence recoverable.
     public func save(_ place: SavedPlace) throws {
         try mutate { places in
             if let index = places.firstIndex(where: { $0.id == place.id }) {
@@ -116,7 +116,10 @@ public nonisolated struct SavedPlaceStore: Sendable {
     }
 
     private static func rescueCorruptFile(at url: URL) throws {
-        let rescueName = "places.corrupted-\(Int(Date.now.timeIntervalSince1970)).json"
+        // Sub-second uniqueness: two rescues in one second must both land — a name
+        // collision would fail the very write that tried to preserve the evidence
+        // (DeepWiki audit, 2026-09-13).
+        let rescueName = "places.corrupted-\(Date.now.timeIntervalSince1970)-\(UUID().uuidString.prefix(8)).json"
         let rescueURL = url.deletingLastPathComponent().appendingPathComponent(rescueName)
         try FileManager.default.moveItem(at: url, to: rescueURL)
     }
