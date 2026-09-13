@@ -1,0 +1,16 @@
+{
+  "repo_notes": [
+    {
+      "content": "SCOPE — what this repository is and is not. YDeliveryKit is the shared foundation under the YDelivery iOS app and its future extension targets (widgets, Live Activity): the semantic color set, StatusChip, PointBadge, the Layout tokens, the app models (Order, OrderStatus, RoutePoint, SavedPlace, AddressParts), and the JSON local stores (OrderStore, SavedPlaceStore). The membership test for anything here: code an extension target needs, which cannot import the app. It is not the API client (that is YandexDeliveryExpress, a separate package) and not the app (laconicman/YDelivery consumes this by version tag). Extracted from the app repository on 2026-09-09 with its history carried over; commits before that date reference the app repo's pull requests.",
+      "author": "maintainer"
+    },
+    {
+      "content": "AUTHORITY lives one repo over. The design decisions these components implement — the pin/badge taxonomy, the semantic status colors and the rule that color never carries meaning alone, the motion table, the reflow ladder — are recorded in the consuming app's DocC catalogue (YDelivery/Documentation.docc/DesignSystem.md and Design.md). This wiki should describe what the components are and how a consumer uses them, not re-derive why they are shaped this way; where a doc comment cites a decision number or DesignSystem article, that citation is the pointer to follow.",
+      "author": "maintainer"
+    },
+    {
+      "content": "CONSTRAINTS a reader must not miss. iOS 17 floor; Swift 6 language mode with MainActor default isolation — pure value types and stores are deliberately nonisolated, and extensions do not inherit nonisolated, so new extensions on model types must state it. The stores take the App Group identifier by parameter (inAppGroup(id:)) — the group is the consuming app's to name, and a hardcoded group identifier is a defect, not a convenience. The JSON substrate never destroys bytes on read: absence and malformed content read as empty, and writes rescue unreadable bytes aside rather than overwriting. The only dependency is SFSafeSymbols; versioning is semantic with source-breaking changes bumping the minor while 0.x.",
+      "author": "maintainer"
+    }
+  ]
+}
