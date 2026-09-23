@@ -43,8 +43,9 @@ public struct PointBadge: View {
     }
 
     /// The two candidates' sizes — the board's row mark, and the dense-row minimum.
-    private static let regularDiameter: CGFloat = 22
-    private static let compactDiameter: CGFloat = 14
+    /// Internal, not private: `RouteLine` aligns its spine and column to the mark.
+    static let regularDiameter: CGFloat = 22
+    static let compactDiameter: CGFloat = 14
 
     public var body: some View {
         ViewThatFits {

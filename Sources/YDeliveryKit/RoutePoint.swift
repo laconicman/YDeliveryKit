@@ -54,3 +54,28 @@ public nonisolated struct RoutePoint: Codable, Hashable, Sendable {
         self.contactPhoneExtension = contactPhoneExtension
     }
 }
+
+nonisolated extension RoutePoint {
+    /// The collapsed contact line — «Иван Петров · +7 912 345-67-89, ext. 12». The
+    /// name prefers the stored components, joined by the formatter so order stays
+    /// the locale's decision; `contactName` is the fallback for wire-born rows that
+    /// never had components. `nil` when nothing is aboard, so a row drops the line
+    /// rather than render an empty one. The extension dials after connect — folded
+    /// into the phone with "ext.", never into the number itself.
+    public var contactSummary: String? {
+        var components = PersonNameComponents()
+        components.givenName = contactGivenName
+        components.familyName = contactFamilyName
+        let formatted = components.formatted()
+        let name = formatted.isEmpty ? (contactName ?? "") : formatted
+        let phone = if let contactPhoneExtension, !contactPhoneExtension.isEmpty,
+                       let contactPhone, !contactPhone.isEmpty {
+            String(localized: "\(contactPhone), ext. \(contactPhoneExtension)",
+                   bundle: .module)
+        } else {
+            contactPhone ?? ""
+        }
+        let summary = [name, phone].filter { !$0.isEmpty }.joined(separator: " · ")
+        return summary.isEmpty ? nil : summary
+    }
+}

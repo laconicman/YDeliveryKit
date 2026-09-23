@@ -10,6 +10,7 @@ What lives here, and the membership test for anything added: *code an extension 
 needs, which cannot import the app.*
 
 - **Design system:** semantic colors (`Colors.xcassets`), `StatusChip`, `PointBadge`,
+  `RouteLine`,
   the `Layout` tokens.
 - **App models:** `Order`, `OrderStatus`, `RoutePoint`, `SavedPlace`, `AddressParts`.
 - **Local stores:** `OrderStore`, `SavedPlaceStore` — one JSON substrate for history,
