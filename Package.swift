@@ -28,6 +28,9 @@ let package = Package(
         // StructuredQueriesSQLite; GRDB carries DatabaseQueue/Row/StatementArguments.
         .package(url: "https://github.com/pointfreeco/sqlite-data", from: "1.12.0"),
         .package(url: "https://github.com/groue/GRDB.swift", from: "7.11.0"),
+        // sqlite-data's test seam: `.test` context swaps the SyncEngine's CloudKit
+        // state for a mock — schema validation runs without iCloud entitlements.
+        .package(url: "https://github.com/pointfreeco/swift-dependencies", from: "1.17.0"),
     ],
     targets: [
         .target(
@@ -46,7 +49,14 @@ let package = Package(
         ),
         .testTarget(
             name: "YDeliveryKitTests",
-            dependencies: ["YDeliveryKit"]
+            dependencies: [
+                "YDeliveryKit",
+                // The substrate suite drives the queue and engine directly —
+                // same seams the app's suite used when the code lived there.
+                .product(name: "GRDB", package: "GRDB.swift"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
+                .product(name: "Dependencies", package: "swift-dependencies"),
+            ]
         ),
     ]
 )

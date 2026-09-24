@@ -17,7 +17,9 @@ nonisolated struct OrderRow: Identifiable {
     let id: UUID
     var createdAt: Date = .init(timeIntervalSince1970: 0)
     var providerAccountRef: String?
-    var provider = "yandex"
+    /// No default — the writer names its provider; a package constant would bind
+    /// the table to one backend.
+    var provider: String
     var lastActivityAt: Date = .init(timeIntervalSince1970: 0)
 }
 
@@ -84,7 +86,9 @@ nonisolated struct OrderItemRow: Identifiable {
     var quantity = 1
     var weightKg: Double?
     var cost: String?
-    var currency = "RUB"
+    /// No default — the writer names its currency; a package constant would bind
+    /// the table to one market.
+    var currency: String
     var sizeLengthCm: Double?
     var sizeWidthCm: Double?
     var sizeHeightCm: Double?
@@ -147,8 +151,9 @@ nonisolated struct AttachmentBlobRow {
 @Table("providerAccounts")
 nonisolated struct ProviderAccountRow {
     @Column(primaryKey: true)
-    var key: String  // "yandex:<corpClientID>"
-    var provider = "yandex"
+    var key: String  // "<provider>:<accountID>" — the consumer's convention
+    /// No default — see `OrderRow.provider`.
+    var provider: String
     var corpClientID: String?
     var displayLabel: String?
     var firstSeenAt: Date?

@@ -95,8 +95,12 @@ nonisolated enum LegacyMigration {
         db: DatabaseQueue
     ) {
         let source = directory.appendingPathComponent(name)
-        guard let data = try? Data(contentsOf: source) else { return }
+        // Absent reads as empty — but *unreadable* is not absent: a file that exists
+        // and won't read must not silently migrate nothing. The generic catch below
+        // logs it and leaves the file, so next launch retries.
+        guard FileManager.default.fileExists(atPath: source.path) else { return }
         do {
+            let data = try Data(contentsOf: source)
             let payload = try decode(data)
             try db.write { db in try insert(payload, db) }
             let migrated = source.deletingPathExtension()

@@ -212,7 +212,7 @@ public nonisolated final class AppDatabase: Sendable {
                        s."status", s."claimID", s."price", s."currency", s."tariff"
                 FROM "orders" o
                 LEFT JOIN "orderProviderStates" s ON s."orderID" = o."id"
-                ORDER BY o."createdAt" DESC
+                ORDER BY o."lastActivityAt" DESC
                 """)
             let stops = try Row.fetchAll(db, sql: """
                 SELECT * FROM "routeStops" ORDER BY "orderID", "position"
@@ -297,16 +297,20 @@ public nonisolated final class AppDatabase: Sendable {
     }
 
     /// The UI write — a fresh or re-recorded order. The root upsert preserves
-    /// `providerAccountRef`/`lastActivityAt` on conflict: those are reconciliation's
-    /// and provider-activity's columns, not the UI's.
+    /// `providerAccountRef` (reconciliation's column) but stamps `lastActivityAt`:
+    /// a record *is* activity — the file store prepended a re-recorded order, and
+    /// this column is the same semantic as a sortable one. `createdAt` keeps the
+    /// order's birthday; `lastActivityAt` keeps its place in the list.
     private static func upsert(_ order: Order, provider: String, into db: Database) throws {
         try db.execute(sql: """
             INSERT INTO "orders"
               ("id", "createdAt", "providerAccountRef", "provider", "lastActivityAt")
             VALUES (?, ?, NULL, ?, ?)
-            ON CONFLICT("id") DO UPDATE SET "createdAt" = excluded."createdAt"
+            ON CONFLICT("id") DO UPDATE SET
+              "createdAt" = excluded."createdAt",
+              "lastActivityAt" = excluded."lastActivityAt"
             """, arguments: Self.args([order.id, order.created.timeIntervalSince1970,
-                            provider, order.created.timeIntervalSince1970]))
+                            provider, Date.now.timeIntervalSince1970]))
     }
 
     private static func insertStops(of order: Order, into db: Database, upsert: Bool) throws {
@@ -387,11 +391,16 @@ public nonisolated final class AppDatabase: Sendable {
     /// remembered — the dedupe the file store did read-then-write, now one transaction
     /// (the retry this guards against exists because a read can fail, so memory may
     /// not know the copy already written).
+    ///
+    /// The adoption applies only to a *new* place: an edit's id is already persisted,
+    /// and retargeting it onto a destination another place holds must not hijack the
+    /// other row — two places may share a door, and the editor owns its own.
     public func savePlace(_ place: SavedPlace) throws {
         try queue.write { db in
             var place = place
             let existing = try Row.fetchAll(db, sql: "SELECT * FROM \"savedPlaces\"")
-            if let match = existing.first(where: {
+            let persisted = existing.contains { ($0["id"] as UUID?) == place.id }
+            if !persisted, let match = existing.first(where: {
                 Self.routePoint($0).destinationKey == place.point.destinationKey
             }) {
                 place.id = match["id"]
