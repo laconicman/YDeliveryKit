@@ -99,10 +99,11 @@ public nonisolated final class AppDatabase: Sendable {
                         for: queue,
                         tables: OrderRow.self, OrderProviderStateRow.self,
                             OrderOptionsRow.self, RouteStopRow.self, OrderItemRow.self,
-                            ProviderEventRow.self, OrderMessageRow.self,
+                            OrderCustomFieldRow.self, ProviderEventRow.self,
+                            OrderMessageRow.self,
                             OrderAttachmentRow.self, AttachmentBlobRow.self,
                         privateTables: ProviderAccountRow.self, OrderPrivateStateRow.self,
-                            SavedPlaceRow.self,
+                            SavedPlaceRow.self, CustomFieldDefinitionRow.self,
                         containerIdentifier: containerIdentifier,
                         startImmediately: false,
                         logger: Logger(
@@ -206,10 +207,15 @@ public nonisolated final class AppDatabase: Sendable {
         /// `orders` is the shared tier — a parked draft has no provider existence
         /// and no place in a share tree. `orderDrafts` is its device-tier home.
         case draftHasNoProviderExistence
+        /// Two field definitions claiming the same carrier would fight over one
+        /// wire slot — the second claim is refused until the first releases it.
+        case fieldCarrierTaken
         public var errorDescription: String? {
             switch self {
             case .draftHasNoProviderExistence:
                 "a draft is not an order — parked drafts live in orderDrafts, not the shared tier"
+            case .fieldCarrierTaken:
+                "another field already rides that carrier slot — release it there first"
             }
         }
     }
@@ -264,7 +270,12 @@ public nonisolated final class AppDatabase: Sendable {
     /// upsert touches only the fields the flat `Order` owns — provider-side columns
     /// (`providerStatus`, `providerDetail`, `dueAt`, `finishedAt`) belong to the sync
     /// writer and survive a UI rewrite.
-    public func recordOrder(_ order: Order, providerObservedAt: Date? = nil) throws {
+    ///
+    /// `customFields` is tri-state: `nil` (the default) leaves the order's field
+    /// values untouched — a status update must not wipe «Заказ 4417» — while a
+    /// non-nil value *replaces* the set wholesale (the draft owns all of them).
+    public func recordOrder(_ order: Order, customFields: [OrderCustomField]? = nil,
+                            providerObservedAt: Date? = nil) throws {
         // A draft is not an order — it has no provider existence, and writing one
         // into the shared tier would let SyncEngine offer an unsent draft as a
         // shareable delivery. Parked drafts live in `orderDrafts`, device-tier.
@@ -276,6 +287,25 @@ public nonisolated final class AppDatabase: Sendable {
                 DELETE FROM "routeStops" WHERE "orderID" = ?
                 """, arguments: Self.args([order.id]))
             try Self.insertStops(of: order, into: db, upsert: true)
+            if let customFields {
+                try db.execute(sql: """
+                    DELETE FROM "orderCustomFields" WHERE "orderID" = ?
+                    """, arguments: Self.args([order.id]))
+                for field in customFields where !field.value.isEmpty {
+                    // The row id derives here, never taken from the model: a value
+                    // copied off another order (a repeat) carries that order's
+                    // derivation, which would collide as a foreign primary key.
+                    let rowID = UUID.derived(
+                        namespace: UUID.DerivedNamespace.orderCustomField,
+                        order.id.uuidString, field.fieldRef.uuidString)
+                    try db.execute(sql: """
+                        INSERT INTO "orderCustomFields"
+                          ("id", "orderID", "fieldRef", "name", "value")
+                        VALUES (?, ?, ?, ?, ?)
+                        """, arguments: Self.args([rowID, order.id, field.fieldRef,
+                                                   field.name, field.value]))
+                }
+            }
             try db.execute(sql: """
                 INSERT INTO "orderProviderStates"
                   ("orderID", "claimID", "status", "tariff", "price", "currency",
@@ -463,6 +493,116 @@ public nonisolated final class AppDatabase: Sendable {
                     p.contactPhoneExtension,
                 ]))
         }
+    }
+
+    // MARK: - Custom fields
+
+    /// The sender's field schema, in definition order — the draft and the settings
+    /// list both read it.
+    public func fieldDefinitions() throws -> [CustomFieldDefinition] {
+        try queue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT * FROM "customFieldDefinitions" ORDER BY "position"
+                """).map { Self.fieldDefinition($0) }
+        }
+    }
+
+    /// Keeps a definition. Two normalizations happen here rather than at every
+    /// editor: a required field is always shown by default (a hidden required
+    /// field blocks the order on a value nothing asks for), and each carrier
+    /// slot admits one claimant — a second field grabbing «order number» would
+    /// fight the first over the same wire key.
+    public func saveFieldDefinition(_ definition: CustomFieldDefinition) throws {
+        var definition = definition
+        if !definition.isOptional { definition.isShownByDefault = true }
+        try queue.write { db in
+            // The clash check lives inside the write — a read outside the
+            // transaction can observe an empty slot that a concurrent save then
+            // takes first. Sync-delivered definitions bypass this check (CloudKit
+            // writes don't come through here); consumers resolve a duplicated
+            // carrier by taking the first claimant in position order, so a
+            // cross-device conflict degrades to a stable pick, not corruption.
+            if definition.carrier != .none {
+                let clash = try Row.fetchOne(db, sql: """
+                    SELECT "id" FROM "customFieldDefinitions"
+                    WHERE "carrier" = ? AND "id" != ? LIMIT 1
+                    """, arguments: Self.args([
+                        definition.carrier.rawValue, definition.id])) != nil
+                if clash { throw WriteError.fieldCarrierTaken }
+            }
+            try db.execute(sql: """
+                INSERT INTO "customFieldDefinitions"
+                  ("id", "name", "kind", "choicesJSON", "isOptional",
+                   "isShownByDefault", "carrier", "position")
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT("id") DO UPDATE SET
+                  "name" = excluded."name", "kind" = excluded."kind",
+                  "choicesJSON" = excluded."choicesJSON",
+                  "isOptional" = excluded."isOptional",
+                  "isShownByDefault" = excluded."isShownByDefault",
+                  "carrier" = excluded."carrier", "position" = excluded."position"
+                """, arguments: Self.args([
+                    definition.id, definition.name, definition.kind.rawValue,
+                    String(decoding: (try? JSONEncoder().encode(definition.choices))
+                                       ?? Data("[]".utf8), as: UTF8.self),
+                    definition.isOptional, definition.isShownByDefault,
+                    definition.carrier.rawValue, definition.position,
+                ]))
+        }
+    }
+
+    /// Forgets a definition. Values already on orders keep their `name` snapshot —
+    /// deleting «Накладная» from settings cannot rewrite history.
+    public func deleteFieldDefinition(id: CustomFieldDefinition.ID) throws {
+        try queue.write { db in
+            try db.execute(
+                sql: "DELETE FROM \"customFieldDefinitions\" WHERE \"id\" = ?",
+                arguments: Self.args([id])
+            )
+        }
+    }
+
+    /// One order's field values, in schema order — orphaned values (their
+    /// definition is gone) trail, alphabetically.
+    public func orderCustomFields(orderID: Order.ID) throws -> [OrderCustomField] {
+        try queue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT f.* FROM "orderCustomFields" f
+                LEFT JOIN "customFieldDefinitions" d ON d."id" = f."fieldRef"
+                WHERE f."orderID" = ?
+                ORDER BY (d."position" IS NULL), d."position", f."name"
+                """, arguments: Self.args([orderID])).map(Self.orderCustomField)
+        }
+    }
+
+    /// Every stored field value — the search filter and Spotlight read this once
+    /// rather than per order.
+    public func allOrderCustomFields() throws -> [OrderCustomField] {
+        try queue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT f.* FROM "orderCustomFields" f
+                LEFT JOIN "customFieldDefinitions" d ON d."id" = f."fieldRef"
+                ORDER BY (d."position" IS NULL), d."position", f."name"
+                """).map(Self.orderCustomField)
+        }
+    }
+
+    private static func fieldDefinition(_ row: Row) -> CustomFieldDefinition {
+        let choicesJSON: String = row["choicesJSON"]
+        return CustomFieldDefinition(
+            id: row["id"], name: row["name"],
+            kind: CustomFieldDefinition.Kind(rawValue: row["kind"]) ?? .text,
+            choices: (try? JSONDecoder().decode(
+                [String].self, from: Data(choicesJSON.utf8))) ?? [],
+            isOptional: row["isOptional"], isShownByDefault: row["isShownByDefault"],
+            carrier: CustomFieldDefinition.Carrier(rawValue: row["carrier"]) ?? .none,
+            position: row["position"])
+    }
+
+    private static func orderCustomField(_ row: Row) -> OrderCustomField {
+        OrderCustomField(
+            orderID: row["orderID"], fieldRef: row["fieldRef"],
+            name: row["name"], value: row["value"])
     }
 
     // MARK: - Sync state (device tier)

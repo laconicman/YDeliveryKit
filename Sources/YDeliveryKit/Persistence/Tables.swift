@@ -100,6 +100,19 @@ nonisolated struct OrderItemRow: Identifiable {
 /// providerEventID)` for journal events, `(orderID, providerStatus, source)` for
 /// sightings — because `SyncEngine` rejects secondary UNIQUE indexes on synchronized
 /// tables at init (spike-verified).
+/// A sender-owned field value on the order — shared tier: collaborators read the
+/// same «Заказ 4417». `fieldRef` is a value → `CustomFieldDefinitionRow.id`, not
+/// an FK: the schema is private-tier, and a value outlives its definition on the
+/// `name` snapshot.
+@Table("orderCustomFields")
+nonisolated struct OrderCustomFieldRow: Identifiable {
+    let id: UUID
+    var orderID: OrderRow.ID
+    var fieldRef = UUID()
+    var name = ""
+    var value = ""
+}
+
 @Table("providerEvents")
 nonisolated struct ProviderEventRow: Identifiable {
     let id: UUID
@@ -187,6 +200,22 @@ nonisolated struct SavedPlaceRow: Identifiable {
     var contactFamilyName: String?
     var contactPhone: String?
     var contactPhoneExtension: String?
+}
+
+/// The sender's field schema («Ваши поля», board `4b`) — private tier: it syncs
+/// to the owner's devices but is nobody's share payload. Values it types live in
+/// `orderCustomFields` on the order itself.
+@Table("customFieldDefinitions")
+nonisolated struct CustomFieldDefinitionRow: Identifiable {
+    let id: UUID
+    var name = ""
+    var kind = "text"
+    /// JSON array of strings — the packing convention `providerDetail` set.
+    var choicesJSON = "[]"
+    var isOptional = true
+    var isShownByDefault = true
+    var carrier = "none"
+    var position = 0
 }
 
 // MARK: - Device tier — never registered with SyncEngine, never leaves this device.
