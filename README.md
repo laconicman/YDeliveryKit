@@ -20,7 +20,9 @@ needs, which cannot import the app.*
   the group, the provider account, and the CloudKit container belong to the host.
 
 Swift 6, iOS 17 floor, `MainActor` default isolation with `nonisolated` value types.
-Swift Testing throughout. Depends on SFSafeSymbols, SQLiteData, and GRDB.
+Swift Testing throughout. Depends on SFSafeSymbols, SQLiteData, GRDB, and
+swift-structured-queries (the `StructuredQueriesSQLite` product is linked directly:
+the `@Table` expansions resolve `StructuredQueriesCore` symbols against it).
 
 Versioning: semantic, tags consumed by URL. Source-breaking changes bump the minor
 while `0.x`, per the house rule in the consuming apps.
