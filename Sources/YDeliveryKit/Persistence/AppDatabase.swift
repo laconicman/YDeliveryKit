@@ -294,6 +294,9 @@ public nonisolated final class AppDatabase: Sendable {
 
     /// The migration path — `INSERT OR IGNORE` everywhere: derived child ids make a
     /// retried import reproduce identical keys, so the second pass writes nothing.
+    /// An order that already exists returns early — replay must not resurrect
+    /// children a later edit deleted (the draft-holding file replays every open
+    /// until the draft tier lands).
     static func insertMigrating(_ order: Order, provider: String, into db: Database) throws {
         try db.execute(sql: """
             INSERT OR IGNORE INTO "orders"
@@ -301,6 +304,7 @@ public nonisolated final class AppDatabase: Sendable {
             VALUES (?, ?, NULL, ?, ?)
             """, arguments: Self.args([order.id, order.created.timeIntervalSince1970,
                             provider, order.created.timeIntervalSince1970]))
+        guard db.changesCount > 0 else { return }  // already migrated — leave it alone
         try insertStops(of: order, into: db, upsert: false)
         try db.execute(sql: """
             INSERT OR IGNORE INTO "orderProviderStates"

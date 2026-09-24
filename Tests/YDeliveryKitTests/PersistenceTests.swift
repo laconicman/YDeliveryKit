@@ -473,30 +473,37 @@ struct PersistenceTests {
         #expect(stopCount == 1, "a second pass reproduces identical keys and writes nothing")
     }
 
-    /// The review's follow-up: drafts in the legacy file must not vanish, and the
-    /// migrated rows must not replay — the file renames to a `migrated-partial`
-    /// marker, so the draft's bytes stay reachable while the placed rows are done.
-    @Test("A file holding drafts renames partial — bytes kept, no replay")
-    func draftHoldingFileRenamesPartial() throws {
+    /// The review's two-horned edge, resolved: drafts in the legacy file must not
+    /// vanish (the file stays in the input set for a future draft migration) AND
+    /// the replay it causes must be a true no-op — a stop a later edit deleted
+    /// must not resurrect on reopen.
+    @Test("A file holding drafts stays put — and replay resurrects nothing")
+    func draftHoldingFileStaysAndReplayIsInert() throws {
         let encoder = JSONEncoder()
         let json = try encoder.encode([
             Order(created: .now, status: .done,
-                  route: [RoutePoint(latitude: 55, longitude: 37, address: "Старый")]),
+                  route: [RoutePoint(latitude: 55, longitude: 37, address: "Старый"),
+                          RoutePoint(latitude: 59, longitude: 30, address: "Невский")]),
             Order(created: .now, status: .draft,
                   route: [RoutePoint(latitude: 55, longitude: 37, address: "Черновик")]),
         ])
         try write(json, named: "orders.json")
         let database = makeDatabase()
 
-        let stored = try database.readOrders()
-        #expect(stored.count == 1, "the placed order migrates")
-        #expect(stored.first?.status == .done)
-        #expect(!FileManager.default.fileExists(
+        let stored = try #require(database.readOrders().first)
+        #expect(stored.status == .done && stored.route.count == 2)
+        #expect(FileManager.default.fileExists(
             atPath: directory.appendingPathComponent("orders.json").path),
-                "the file leaves rotation — reopening must not replay migrated rows")
-        #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path)
-            .contains { $0.hasPrefix("orders.migrated-partial-") },
-                "the partial marker keeps the draft's bytes reachable")
+                "the file stays — the draft's bytes remain in the migration input set")
+
+        // The order is edited down to one stop; reopening replays the file, and the
+        // deleted stop must not return.
+        var edited = stored
+        edited.route = [stored.route[0]]
+        try database.recordOrder(edited)
+        _ = try makeDatabase().queue  // a fresh open replays the held file
+        let reread = try #require(makeDatabase().readOrders().first)
+        #expect(reread.route.count == 1, "replay skips already-migrated orders entirely")
     }
 
     @Test("A corrupt orders.json is rescued, not destroyed and not blocking")
