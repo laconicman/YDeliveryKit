@@ -292,11 +292,17 @@ public nonisolated final class AppDatabase: Sendable {
                     DELETE FROM "orderCustomFields" WHERE "orderID" = ?
                     """, arguments: Self.args([order.id]))
                 for field in customFields where !field.value.isEmpty {
+                    // The row id derives here, never taken from the model: a value
+                    // copied off another order (a repeat) carries that order's
+                    // derivation, which would collide as a foreign primary key.
+                    let rowID = UUID.derived(
+                        namespace: UUID.DerivedNamespace.orderCustomField,
+                        order.id.uuidString, field.fieldRef.uuidString)
                     try db.execute(sql: """
                         INSERT INTO "orderCustomFields"
                           ("id", "orderID", "fieldRef", "name", "value")
                         VALUES (?, ?, ?, ?, ?)
-                        """, arguments: Self.args([field.id, order.id, field.fieldRef,
+                        """, arguments: Self.args([rowID, order.id, field.fieldRef,
                                                    field.name, field.value]))
                 }
             }
@@ -509,13 +515,21 @@ public nonisolated final class AppDatabase: Sendable {
     public func saveFieldDefinition(_ definition: CustomFieldDefinition) throws {
         var definition = definition
         if !definition.isOptional { definition.isShownByDefault = true }
-        if definition.carrier != .none {
-            let clash = try fieldDefinitions().contains {
-                $0.carrier == definition.carrier && $0.id != definition.id
-            }
-            if clash { throw WriteError.fieldCarrierTaken }
-        }
         try queue.write { db in
+            // The clash check lives inside the write — a read outside the
+            // transaction can observe an empty slot that a concurrent save then
+            // takes first. Sync-delivered definitions bypass this check (CloudKit
+            // writes don't come through here); consumers resolve a duplicated
+            // carrier by taking the first claimant in position order, so a
+            // cross-device conflict degrades to a stable pick, not corruption.
+            if definition.carrier != .none {
+                let clash = try Row.fetchOne(db, sql: """
+                    SELECT "id" FROM "customFieldDefinitions"
+                    WHERE "carrier" = ? AND "id" != ? LIMIT 1
+                    """, arguments: Self.args([
+                        definition.carrier.rawValue, definition.id])) != nil
+                if clash { throw WriteError.fieldCarrierTaken }
+            }
             try db.execute(sql: """
                 INSERT INTO "customFieldDefinitions"
                   ("id", "name", "kind", "choicesJSON", "isOptional",
