@@ -277,6 +277,12 @@ public nonisolated final class AppDatabase: Sendable {
     /// `customFields` is tri-state: `nil` (the default) leaves the order's field
     /// values untouched — a status update must not wipe «Заказ 4417» — while a
     /// non-nil value *replaces* the set wholesale (the draft owns all of them).
+    ///
+    /// A stamped write is a provider *merge*: it applies only while its as-of
+    /// stamp is at least as new as the stored observation — a delayed answer
+    /// describes older provider truth and must not regress any of the fields it
+    /// carries, route included (review, PR #7). Unstamped writes are local
+    /// edits and always apply.
     public func recordOrder(_ order: Order, customFields: [OrderCustomField]? = nil,
                             providerObservedAt: Date? = nil) throws {
         // A draft is not an order — it has no provider existence, and writing one
@@ -284,6 +290,13 @@ public nonisolated final class AppDatabase: Sendable {
         // shareable delivery. Parked drafts live in `orderDrafts`, device-tier.
         guard order.status != .draft else { throw WriteError.draftHasNoProviderExistence }
         try queue.write { db in
+            if let stamp = providerObservedAt?.timeIntervalSince1970,
+               try Bool.fetchOne(db, sql: """
+                   SELECT "providerObservedAt" > ? FROM "orderProviderStates"
+                   WHERE "orderID" = ?
+                   """, arguments: Self.args([stamp, order.id])) == true {
+                return
+            }
             try Self.upsert(order, provider: provider,
                             providerAccountRef: providerAccountRef, into: db)
             try db.execute(sql: """
@@ -619,9 +632,10 @@ public nonisolated final class AppDatabase: Sendable {
     /// event a no-op — `inserted` false — so callers can treat insertion as *news*
     /// (a cursor reset replays the feed without re-firing the notification layer).
     /// `statusAdvanced` is the tighter signal the notification layer announces:
-    /// true only when the mirror's provider word actually moved to this event's —
-    /// a sighting of the same word, a stale event, or a non-status change does
-    /// not re-announce what the sender already saw (review, PR #7).
+    /// true only when a *new* timeline row moved the mirror's provider word to
+    /// this event's — a replayed event, a sighting of the same word, a stale
+    /// event, or a non-status change does not re-announce what the sender
+    /// already saw (review, PR #7).
     ///
     /// The mirror is a separate concern from the timeline, governed by freshness
     /// rather than insertion (review, PR #6): a status-bearing event updates
@@ -667,8 +681,13 @@ public nonisolated final class AppDatabase: Sendable {
                     ]))
                 // The WHERE gate is the freshness check — a stale event updates
                 // zero rows — and only a word that differs from the stored one
-                // counts as the status having moved.
-                statusAdvanced = db.changesCount > 0 && previous != event.providerStatus
+                // counts as the status having moved. `inserted` joins the gate
+                // because a replayed row can overwrite the mirror at an equal
+                // stamp — the feed's tiebreak is arrival order — without being
+                // news: re-announcing it would ping-pong banners on a cursor
+                // reset (review, PR #7).
+                statusAdvanced = inserted && db.changesCount > 0
+                    && previous != event.providerStatus
             }
             if inserted {
                 try db.execute(sql: """
