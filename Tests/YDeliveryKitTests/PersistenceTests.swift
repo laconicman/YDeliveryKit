@@ -473,11 +473,11 @@ struct PersistenceTests {
         #expect(stopCount == 1, "a second pass reproduces identical keys and writes nothing")
     }
 
-    /// The review's follow-up: drafts in the legacy file must not vanish — the
-    /// shared tier refuses them and `orderDrafts` is skeletal, so the file stays
-    /// put as the recovery path until draft migration exists.
-    @Test("A file holding drafts stays put — bytes remain the recovery path")
-    func draftHoldingFileIsNotArchived() throws {
+    /// The review's follow-up: drafts in the legacy file must not vanish, and the
+    /// migrated rows must not replay — the file renames to a `migrated-partial`
+    /// marker, so the draft's bytes stay reachable while the placed rows are done.
+    @Test("A file holding drafts renames partial — bytes kept, no replay")
+    func draftHoldingFileRenamesPartial() throws {
         let encoder = JSONEncoder()
         let json = try encoder.encode([
             Order(created: .now, status: .done,
@@ -491,9 +491,12 @@ struct PersistenceTests {
         let stored = try database.readOrders()
         #expect(stored.count == 1, "the placed order migrates")
         #expect(stored.first?.status == .done)
-        #expect(FileManager.default.fileExists(
+        #expect(!FileManager.default.fileExists(
             atPath: directory.appendingPathComponent("orders.json").path),
-                "a partial import keeps the file — the draft's bytes are not orphaned")
+                "the file leaves rotation — reopening must not replay migrated rows")
+        #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path)
+            .contains { $0.hasPrefix("orders.migrated-partial-") },
+                "the partial marker keeps the draft's bytes reachable")
     }
 
     @Test("A corrupt orders.json is rescued, not destroyed and not blocking")

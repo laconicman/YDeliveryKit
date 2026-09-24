@@ -96,8 +96,9 @@ nonisolated enum LegacyMigration {
     /// One source's decode → transaction → rename. `INSERT OR IGNORE` on derived keys
     /// is what makes a crash in the commit→rename window safe to retry. `insert`
     /// returns the row count the substrate *refused* (drafts today) — a partial
-    /// import leaves the file in place, because those rows' only home is still the
-    /// file itself.
+    /// import renames to `*.migrated-partial-*` instead: the refused rows keep
+    /// their bytes reachable, and the rename takes the file out of rotation so the
+    /// migrated rows never replay.
     private static func migrate<Payload>(
         file name: String,
         in directory: URL,
@@ -115,7 +116,15 @@ nonisolated enum LegacyMigration {
             let payload = try decode(data)
             let skipped = try db.write { db in try insert(payload, db) }
             if skipped > 0 {
-                logger.error("\(name) held \(skipped) row(s) the substrate refuses — file left in place as the recovery path until those rows have a home")
+                // Rows the substrate refused (drafts today) keep their bytes — but
+                // leaving the file named `orders.json` would replay the migrated
+                // rows every launch and resurrect deleted stops. The partial marker
+                // keeps the bytes reachable while taking the file out of rotation.
+                let partial = source.deletingPathExtension()
+                    .appendingPathExtension(
+                        "migrated-partial-\(markerTimestamp)-\(UUID().uuidString.prefix(8)).json")
+                try FileManager.default.moveItem(at: source, to: partial)
+                logger.error("\(name) held \(skipped) row(s) the substrate refuses — renamed to \(partial.lastPathComponent, privacy: .public) as the recovery path until those rows have a home")
                 return
             }
             let migrated = source.deletingPathExtension()
