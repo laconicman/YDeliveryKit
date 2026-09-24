@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import GRDB
 import OSLog
@@ -116,10 +117,17 @@ nonisolated enum LegacyMigration {
             let payload = try decode(data)
             let remainder = try db.write { db in try insert(payload, db) }
             if let remainder {
+                // Content-named, not timestamped: an interruption after this write
+                // re-derives the same file on retry — a pending artifact must be
+                // idempotent, or every reopen accumulates duplicates.
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.sortedKeys]  // stable bytes — the name must be
+                let remainderData = try encoder.encode(remainder)
+                let tag = Insecure.SHA1.hash(data: remainderData)
+                    .prefix(6).map { String(format: "%02x", $0) }.joined()
                 let pending = source.deletingPathExtension()
-                    .appendingPathExtension(
-                        "pending-\(markerTimestamp)-\(UUID().uuidString.prefix(8)).json")
-                try JSONEncoder().encode(remainder).write(to: pending)
+                    .appendingPathExtension("pending-\(tag).json")
+                try remainderData.write(to: pending, options: .atomic)
                 logger.error("\(name) held rows the substrate refuses — separated to \(pending.lastPathComponent, privacy: .public) until those rows have a home")
             }
             let migrated = source.deletingPathExtension()

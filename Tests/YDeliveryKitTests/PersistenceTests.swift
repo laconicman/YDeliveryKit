@@ -511,6 +511,30 @@ struct PersistenceTests {
         #expect(try makeDatabase().readOrders().first?.route.count == 1)
     }
 
+    /// Interruption between the pending write and the source rename must not
+    /// accumulate copies — the pending name is content-derived, so a retry
+    /// rewrites the same file.
+    @Test("An interrupted pending write retries to the same file")
+    func pendingWriteIsIdempotent() throws {
+        let encoder = JSONEncoder()
+        let json = try encoder.encode([
+            Order(created: .now, status: .draft,
+                  route: [RoutePoint(latitude: 55, longitude: 37, address: "Черновик")]),
+        ])
+        // The interruption, replayed by hand: the pending sibling exists while the
+        // source is still the input — the real retry path after a mid-sequence stop.
+        try write(json, named: "orders.json")
+        _ = try makeDatabase().queue
+        let first = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+            .filter { $0.hasPrefix("orders.pending-") }
+        try write(json, named: "orders.json")  // the source as a retry would find it
+        _ = try makeDatabase().queue
+        let second = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+            .filter { $0.hasPrefix("orders.pending-") }
+        #expect(first == second && second.count == 1,
+                "one pending artifact per content — interruption cannot accumulate")
+    }
+
     @Test("A corrupt orders.json is rescued, not destroyed and not blocking")
     func corruptSourceIsRescued() throws {
         try write(Data("not json".utf8), named: "orders.json")
