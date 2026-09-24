@@ -711,10 +711,61 @@ struct PersistenceTests {
             orderID: order.id, providerEventID: 7, at: .now,
             kind: "status", providerStatus: "performer_found", source: "journal")
 
-        #expect(try database.recordProviderEvent(event))
-        #expect(try !database.recordProviderEvent(event),
+        #expect(try database.recordProviderEvent(event).inserted)
+        #expect(try !database.recordProviderEvent(event).inserted,
                 "a replayed feed id merges by key — the notification layer reads false as silence")
         #expect(try database.providerEvents(orderID: order.id).count == 1)
+    }
+
+    /// The notification layer's question, answered by the database: did this
+    /// event move the order to a provider word the sender hasn't been told?
+    /// A replay didn't, a stale event didn't, and a re-sighting of the same
+    /// word didn't — only a fresh observation of a different word did.
+    @Test("statusAdvanced is the transition signal — replays and re-sightings don't fire it")
+    func statusAdvancedMarksRealTransitions() throws {
+        let database = makeDatabase()
+        let order = Order(
+            created: .now, status: .active,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")],
+            claimID: "claim-t")
+        try database.recordOrder(order)
+
+        let found = ProviderEvent(
+            orderID: order.id, providerEventID: 1,
+            at: Date(timeIntervalSince1970: 1000),
+            kind: "status", providerStatus: "performer_found", source: "journal")
+        #expect(try database.recordProviderEvent(found) ==
+                ProviderEventOutcome(inserted: true, statusAdvanced: true),
+                "a new status word advances the mirror")
+        #expect(try database.recordProviderEvent(found) ==
+                ProviderEventOutcome(inserted: false, statusAdvanced: false),
+                "the replay inserts nothing and announces nothing")
+
+        // The same word sighted through a different feed is a *new timeline
+        // row* — dedupe is per (status, source) — but not a new status:
+        // «courier found» must not banner twice because search saw it too.
+        #expect(try database.recordProviderEvent(ProviderEvent(
+            orderID: order.id,
+            at: Date(timeIntervalSince1970: 1200),
+            kind: "sighting", providerStatus: "performer_found", source: "search")) ==
+                ProviderEventOutcome(inserted: true, statusAdvanced: false),
+                "the same word from another feed lands on the timeline silently")
+
+        // A stale event is history — it inserts, it does not announce.
+        #expect(try database.recordProviderEvent(ProviderEvent(
+            orderID: order.id, providerEventID: 0,
+            at: Date(timeIntervalSince1970: 500),
+            kind: "status", providerStatus: "accepted", source: "journal")) ==
+                ProviderEventOutcome(inserted: true, statusAdvanced: false),
+                "an event older than the mirror's observation is timeline-only")
+
+        // And a genuinely new word through the sighting path fires — the
+        // journal's gap is exactly what sightings backstop.
+        #expect(try database.recordProviderEvent(ProviderEvent(
+            orderID: order.id,
+            at: Date(timeIntervalSince1970: 1400),
+            kind: "sighting", providerStatus: "delivery_arrived", source: "card")) ==
+                ProviderEventOutcome(inserted: true, statusAdvanced: true))
     }
 
     @Test("A status event writes the mirror — but an older event can't rewind it")
@@ -775,7 +826,7 @@ struct PersistenceTests {
         #expect(try !database.recordProviderEvent(ProviderEvent(
             orderID: order.id, at: Date(timeIntervalSince1970: 1300),
             kind: "status", providerStatus: "delivery_arrived",
-            detail: "courier called", source: "card")),
+            detail: "courier called", source: "card")).inserted,
                 "same status from the same source is the same sighting — no second row")
         #expect(try database.providerEvents(orderID: order.id).count == 1)
 

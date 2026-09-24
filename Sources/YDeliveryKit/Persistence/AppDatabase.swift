@@ -616,8 +616,12 @@ public nonisolated final class AppDatabase: Sendable {
     // MARK: - Provider events
 
     /// Records one provider-reported change. The row's derived id makes a replayed
-    /// event a no-op — `false` — so callers can treat *inserted* as *news* (a
-    /// cursor reset replays the feed without re-firing the notification layer).
+    /// event a no-op — `inserted` false — so callers can treat insertion as *news*
+    /// (a cursor reset replays the feed without re-firing the notification layer).
+    /// `statusAdvanced` is the tighter signal the notification layer announces:
+    /// true only when the mirror's provider word actually moved to this event's —
+    /// a sighting of the same word, a stale event, or a non-status change does
+    /// not re-announce what the sender already saw (review, PR #7).
     ///
     /// The mirror is a separate concern from the timeline, governed by freshness
     /// rather than insertion (review, PR #6): a status-bearing event updates
@@ -630,7 +634,7 @@ public nonisolated final class AppDatabase: Sendable {
     /// previous observation's, and a non-status event's detail never poses as
     /// the status's own. `lastActivityAt` moves forward only.
     @discardableResult
-    public func recordProviderEvent(_ event: ProviderEvent) throws -> Bool {
+    public func recordProviderEvent(_ event: ProviderEvent) throws -> ProviderEventOutcome {
         try queue.write { db in
             try db.execute(sql: """
                 INSERT OR IGNORE INTO "providerEvents"
@@ -643,7 +647,12 @@ public nonisolated final class AppDatabase: Sendable {
                     event.providerStatus, event.detail, event.source,
                 ]))
             let inserted = db.changesCount > 0
+            var statusAdvanced = false
             if event.providerStatus != nil {
+                let previous: String? = try Row.fetchOne(db, sql: """
+                    SELECT "providerStatus" FROM "orderProviderStates"
+                    WHERE "orderID" = ?
+                    """, arguments: Self.args([event.orderID]))?["providerStatus"]
                 try db.execute(sql: """
                     UPDATE "orderProviderStates" SET
                       "providerStatus" = ?,
@@ -656,6 +665,10 @@ public nonisolated final class AppDatabase: Sendable {
                         event.at.timeIntervalSince1970, event.orderID,
                         event.at.timeIntervalSince1970,
                     ]))
+                // The WHERE gate is the freshness check — a stale event updates
+                // zero rows — and only a word that differs from the stored one
+                // counts as the status having moved.
+                statusAdvanced = db.changesCount > 0 && previous != event.providerStatus
             }
             if inserted {
                 try db.execute(sql: """
@@ -663,7 +676,8 @@ public nonisolated final class AppDatabase: Sendable {
                     WHERE "id" = ?
                     """, arguments: Self.args([event.at.timeIntervalSince1970, event.orderID]))
             }
-            return inserted
+            return ProviderEventOutcome(
+                inserted: inserted, statusAdvanced: statusAdvanced)
         }
     }
 
