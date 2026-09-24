@@ -611,11 +611,16 @@ public nonisolated final class AppDatabase: Sendable {
     /// event a no-op — `false` — so callers can treat *inserted* as *news* (a
     /// cursor reset replays the feed without re-firing the notification layer).
     ///
-    /// A fresh event that carries a status is also the mirror's promised "sync
-    /// writer": `providerStatus`, `providerDetail` and the sighting stamp update
-    /// where the collapsed `status` alone cannot speak. Replays never touch the
-    /// mirror — an old event must not regress it. `lastActivityAt` moves forward
-    /// only: a late-arriving event is history, not the newest activity.
+    /// The mirror is a separate concern from the timeline, governed by freshness
+    /// rather than insertion (review, PR #6): a status-bearing event updates
+    /// `providerStatus`/`providerDetail`/`providerObservedAt` only when its stamp
+    /// is at least as new as the stored observation — a late-arriving journal
+    /// entry still lands on the timeline but cannot regress the mirror. A
+    /// repeated *sighting* dedupes out of the timeline yet still refreshes the
+    /// mirror, which is how an id-less observation says "still this, as of now".
+    /// Status and detail are one pair — a status event without detail clears the
+    /// previous observation's, and a non-status event's detail never poses as
+    /// the status's own. `lastActivityAt` moves forward only.
     @discardableResult
     public func recordProviderEvent(_ event: ProviderEvent) throws -> Bool {
         try queue.write { db in
@@ -629,24 +634,28 @@ public nonisolated final class AppDatabase: Sendable {
                     event.at.timeIntervalSince1970, event.kind,
                     event.providerStatus, event.detail, event.source,
                 ]))
-            guard db.changesCount > 0 else { return false }
-            if event.providerStatus != nil || event.detail != nil {
+            let inserted = db.changesCount > 0
+            if event.providerStatus != nil {
                 try db.execute(sql: """
                     UPDATE "orderProviderStates" SET
-                      "providerStatus" = COALESCE(?, "providerStatus"),
-                      "providerDetail" = COALESCE(?, "providerDetail"),
+                      "providerStatus" = ?,
+                      "providerDetail" = ?,
                       "providerObservedAt" = ?
                     WHERE "orderID" = ?
+                      AND ("providerObservedAt" IS NULL OR "providerObservedAt" <= ?)
                     """, arguments: Self.args([
                         event.providerStatus, event.detail,
                         event.at.timeIntervalSince1970, event.orderID,
+                        event.at.timeIntervalSince1970,
                     ]))
             }
-            try db.execute(sql: """
-                UPDATE "orders" SET "lastActivityAt" = MAX("lastActivityAt", ?)
-                WHERE "id" = ?
-                """, arguments: Self.args([event.at.timeIntervalSince1970, event.orderID]))
-            return true
+            if inserted {
+                try db.execute(sql: """
+                    UPDATE "orders" SET "lastActivityAt" = MAX("lastActivityAt", ?)
+                    WHERE "id" = ?
+                    """, arguments: Self.args([event.at.timeIntervalSince1970, event.orderID]))
+            }
+            return inserted
         }
     }
 
