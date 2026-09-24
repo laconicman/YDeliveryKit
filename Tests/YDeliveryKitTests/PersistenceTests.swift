@@ -473,12 +473,13 @@ struct PersistenceTests {
         #expect(stopCount == 1, "a second pass reproduces identical keys and writes nothing")
     }
 
-    /// The review's two-horned edge, resolved: drafts in the legacy file must not
-    /// vanish (the file stays in the input set for a future draft migration) AND
-    /// the replay it causes must be a true no-op — a stop a later edit deleted
-    /// must not resurrect on reopen.
-    @Test("A file holding drafts stays put — and replay resurrects nothing")
-    func draftHoldingFileStaysAndReplayIsInert() throws {
+    /// The review's three-horned edge, resolved by separation: drafts in the legacy
+    /// file are refused by the shared tier, so they are written to a durable
+    /// `orders.pending-*.json` sibling before the source renames — the committed
+    /// file leaves rotation entirely (no replay can resurrect an edited or deleted
+    /// order), and the refused bytes stay findable for a future draft migration.
+    @Test("Drafts separate to a pending sibling — the committed file is done")
+    func draftsSeparateToPendingFile() throws {
         let encoder = JSONEncoder()
         let json = try encoder.encode([
             Order(created: .now, status: .done,
@@ -492,18 +493,22 @@ struct PersistenceTests {
 
         let stored = try #require(database.readOrders().first)
         #expect(stored.status == .done && stored.route.count == 2)
-        #expect(FileManager.default.fileExists(
-            atPath: directory.appendingPathComponent("orders.json").path),
-                "the file stays — the draft's bytes remain in the migration input set")
+        let names = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+        #expect(!names.contains("orders.json"), "the committed file leaves rotation")
+        #expect(names.contains { $0.hasPrefix("orders.migrated-") })
+        let pending = try #require(names.first { $0.hasPrefix("orders.pending-") },
+                                   "refused rows get a durable sibling, not the void")
+        let pendingOrders = try JSONDecoder().decode(
+            [Order].self, from: Data(contentsOf: directory.appendingPathComponent(pending)))
+        #expect(pendingOrders.map(\.status) == [.draft],
+                "the pending file carries exactly what the shared tier refused")
 
-        // The order is edited down to one stop; reopening replays the file, and the
-        // deleted stop must not return.
+        // Reopening cannot replay: nothing answers to orders.json anymore.
         var edited = stored
         edited.route = [stored.route[0]]
         try database.recordOrder(edited)
-        _ = try makeDatabase().queue  // a fresh open replays the held file
-        let reread = try #require(makeDatabase().readOrders().first)
-        #expect(reread.route.count == 1, "replay skips already-migrated orders entirely")
+        _ = try makeDatabase().queue
+        #expect(try makeDatabase().readOrders().first?.route.count == 1)
     }
 
     @Test("A corrupt orders.json is rescued, not destroyed and not blocking")

@@ -18,7 +18,7 @@ nonisolated enum LegacyMigration {
 
     /// The `claims-sync.json` shape — `SyncStateStore.State` as the file store wrote
     /// it. Kept private: the file is legacy, the type exists only to decode it.
-    private struct FileSyncState: Decodable {
+    private struct FileSyncState: Codable {
         var cursor: String?
         var historyBackfilled: Bool
         var pendingClaimIDs: [String]?
@@ -40,15 +40,15 @@ nonisolated enum LegacyMigration {
         migrate(file: "orders.json", in: directory, decode: {
             try JSONDecoder().decode([Order].self, from: $0)
         }, insert: { orders, db in
-            var skipped = 0
+            var drafts: [Order] = []
             for order in orders {
                 // A draft has no provider existence — the shared tier refuses it
-                // and `orderDrafts` is skeletal (no route columns), so the only
-                // honest destination today is the file itself, kept in place.
-                if order.status == .draft { skipped += 1; continue }
+                // and `orderDrafts` is skeletal (no route columns), so the refused
+                // rows separate into a durable sibling file instead.
+                if order.status == .draft { drafts.append(order); continue }
                 try AppDatabase.insertMigrating(order, provider: provider, into: db)
             }
-            return skipped
+            return drafts.isEmpty ? nil : drafts
         }, db: db)
     }
 
@@ -59,7 +59,7 @@ nonisolated enum LegacyMigration {
             for place in places {
                 try insert(place, into: db)
             }
-            return 0
+            return nil
         }, db: db)
     }
 
@@ -89,21 +89,21 @@ nonisolated enum LegacyMigration {
                         Date.now.timeIntervalSince1970,
                     ]))
             }
-            return 0
+            return nil
         }, db: db)
     }
 
     /// One source's decode → transaction → rename. `INSERT OR IGNORE` on derived keys
     /// is what makes a crash in the commit→rename window safe to retry. `insert`
-    /// returns the row count the substrate *refused* (drafts today) — a partial
-    /// import leaves the file in the input set, because those rows' only home is
-    /// still the file itself, and `insertMigrating`'s already-present guard keeps
-    /// the repeated pass a true no-op for the rows that did migrate.
-    private static func migrate<Payload>(
+    /// returns the rows the substrate *refused* — drafts today — which are separated
+    /// into a durable `<stem>.pending-*.json` sibling before the source renames, so
+    /// the committed file leaves rotation entirely (no replay, no resurrection of
+    /// deleted rows) while the refused bytes stay findable for a future migration.
+    private static func migrate<Payload: Encodable>(
         file name: String,
         in directory: URL,
         decode: (Data) throws -> Payload,
-        insert: (Payload, Database) throws -> Int,
+        insert: (Payload, Database) throws -> Payload?,
         db: DatabaseQueue
     ) {
         let source = directory.appendingPathComponent(name)
@@ -114,14 +114,13 @@ nonisolated enum LegacyMigration {
         do {
             let data = try Data(contentsOf: source)
             let payload = try decode(data)
-            let skipped = try db.write { db in try insert(payload, db) }
-            if skipped > 0 {
-                // Rows the substrate refused (drafts today) have no other home —
-                // the file stays in the input set so a future draft migration can
-                // still find them. Replay is safe: insertMigrating skips orders
-                // already present, so migrated rows are never re-touched.
-                logger.error("\(name) held \(skipped) row(s) the substrate refuses — file left in place as the recovery path until those rows have a home")
-                return
+            let remainder = try db.write { db in try insert(payload, db) }
+            if let remainder {
+                let pending = source.deletingPathExtension()
+                    .appendingPathExtension(
+                        "pending-\(markerTimestamp)-\(UUID().uuidString.prefix(8)).json")
+                try JSONEncoder().encode(remainder).write(to: pending)
+                logger.error("\(name) held rows the substrate refuses — separated to \(pending.lastPathComponent, privacy: .public) until those rows have a home")
             }
             let migrated = source.deletingPathExtension()
                 .appendingPathExtension(
