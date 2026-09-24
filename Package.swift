@@ -28,6 +28,13 @@ let package = Package(
         // StructuredQueriesSQLite; GRDB carries DatabaseQueue/Row/StatementArguments.
         .package(url: "https://github.com/pointfreeco/sqlite-data", from: "1.12.0"),
         .package(url: "https://github.com/groue/GRDB.swift", from: "7.11.0"),
+        // The @Table macro expands to StructuredQueriesCore calls — the *direct*
+        // product link is load-bearing: consumed as a dynamic PackageProduct
+        // framework, a transitive reach leaves this target's dylib with undefined
+        // symbols. StructuredQueriesSQLite specifically: it builds as a shared
+        // framework that re-exports StructuredQueriesCore's symbols, so the Kit,
+        // SQLiteData, and the app all resolve ONE `Table` protocol descriptor.
+        .package(url: "https://github.com/pointfreeco/swift-structured-queries", from: "0.39.2"),
         // sqlite-data's test seam: `.test` context swaps the SyncEngine's CloudKit
         // state for a mock — schema validation runs without iCloud entitlements.
         .package(url: "https://github.com/pointfreeco/swift-dependencies", from: "1.17.0"),
@@ -39,6 +46,7 @@ let package = Package(
                 .product(name: "SFSafeSymbols", package: "SFSafeSymbols"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
                 .product(name: "GRDB", package: "GRDB.swift"),
+                .product(name: "StructuredQueriesSQLite", package: "swift-structured-queries"),
             ],
             swiftSettings: [
                 .defaultIsolation(MainActor.self),
