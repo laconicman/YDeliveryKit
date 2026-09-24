@@ -288,6 +288,39 @@ struct PersistenceTests {
                 "activity order, not birthday order — a sync-touched old order leads")
     }
 
+    /// The shared tier is for provider-ordered deliveries only — a parked draft has
+    /// no provider existence, and SyncEngine must never be offered one.
+    @Test("A draft cannot enter the shared tier")
+    func draftIsRefused() throws {
+        let database = makeDatabase()
+        let draft = Order(
+            created: .now, status: .draft,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")])
+
+        #expect(throws: AppDatabase.WriteError.draftHasNoProviderExistence) {
+            try database.recordOrder(draft)
+        }
+        #expect(try database.readOrders().isEmpty, "nothing was written")
+    }
+
+    /// A UI-placed order belongs to the account that placed it — the ref stamps on
+    /// insert so reconciliation can name the owner when accounts diverge.
+    @Test("A recorded order stamps this device's account")
+    func recordStampsTheAccount() throws {
+        let database = makeDatabase()
+        try database.recordOrder(Order(
+            created: .now, status: .active,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")]))
+
+        let ref: String? = try database.queue.read {
+            let row = try Row.fetchOne($0, sql: """
+                SELECT "providerAccountRef" FROM "orders"
+                """)
+            return row?["providerAccountRef"]
+        }
+        #expect(ref == "test:unattributed")
+    }
+
     @Test("A UI rewrite preserves a sync-stamped providerObservedAt")
     func uiRewritePreservesObservedAt() throws {
         let database = makeDatabase()

@@ -40,8 +40,12 @@ nonisolated enum LegacyMigration {
         migrate(file: "orders.json", in: directory, decode: {
             try JSONDecoder().decode([Order].self, from: $0)
         }, insert: { orders, db in
-            for order in orders {
+            for order in orders where order.status != .draft {
                 try AppDatabase.insertMigrating(order, provider: provider, into: db)
+            }
+            let drafts = orders.filter { $0.status == .draft }
+            if !drafts.isEmpty {
+                logger.error("Skipped \(drafts.count) draft row(s) in orders.json — drafts have no provider existence and no place in the shared tier")
             }
         }, db: db)
     }

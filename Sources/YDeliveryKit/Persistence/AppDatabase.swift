@@ -194,6 +194,19 @@ public nonisolated final class AppDatabase: Sendable {
         }
     }
 
+    /// A write the store refuses rather than files wrongly.
+    public enum WriteError: LocalizedError {
+        /// `orders` is the shared tier — a parked draft has no provider existence
+        /// and no place in a share tree. `orderDrafts` is its device-tier home.
+        case draftHasNoProviderExistence
+        public var errorDescription: String? {
+            switch self {
+            case .draftHasNoProviderExistence:
+                "a draft is not an order — parked drafts live in orderDrafts, not the shared tier"
+            }
+        }
+    }
+
     /// GRDB binds `UUID` as a 16-byte BLOB; the contract's id columns are TEXT under
     /// `STRICT` — the same lowercase representation StructuredQueries' `.uuid`
     /// binding writes. One funnel keeps handwritten SQL on that representation.
@@ -245,8 +258,13 @@ public nonisolated final class AppDatabase: Sendable {
     /// (`providerStatus`, `providerDetail`, `dueAt`, `finishedAt`) belong to the sync
     /// writer and survive a UI rewrite.
     public func recordOrder(_ order: Order, providerObservedAt: Date? = nil) throws {
+        // A draft is not an order — it has no provider existence, and writing one
+        // into the shared tier would let SyncEngine offer an unsent draft as a
+        // shareable delivery. Parked drafts live in `orderDrafts`, device-tier.
+        guard order.status != .draft else { throw WriteError.draftHasNoProviderExistence }
         try queue.write { db in
-            try Self.upsert(order, provider: provider, into: db)
+            try Self.upsert(order, provider: provider,
+                            providerAccountRef: providerAccountRef, into: db)
             try db.execute(sql: """
                 DELETE FROM "routeStops" WHERE "orderID" = ?
                 """, arguments: Self.args([order.id]))
@@ -296,21 +314,25 @@ public nonisolated final class AppDatabase: Sendable {
             ]))
     }
 
-    /// The UI write — a fresh or re-recorded order. The root upsert preserves
-    /// `providerAccountRef` (reconciliation's column) but stamps `lastActivityAt`:
-    /// a record *is* activity — the file store prepended a re-recorded order, and
-    /// this column is the same semantic as a sortable one. `createdAt` keeps the
-    /// order's birthday; `lastActivityAt` keeps its place in the list.
-    private static func upsert(_ order: Order, provider: String, into db: Database) throws {
+    /// The UI write — a fresh or re-recorded order. `providerAccountRef` stamps on
+    /// insert — a UI-placed order belongs to the account that placed it — and is
+    /// preserved on conflict: re-keying to a learned account is reconciliation's
+    /// move, not the writer's. `lastActivityAt` always stamps: a record *is*
+    /// activity — the file store prepended a re-recorded order, and this column is
+    /// the same semantic as a sortable one. `createdAt` keeps the order's
+    /// birthday; `lastActivityAt` keeps its place in the list.
+    private static func upsert(_ order: Order, provider: String,
+                               providerAccountRef: String, into db: Database) throws {
         try db.execute(sql: """
             INSERT INTO "orders"
               ("id", "createdAt", "providerAccountRef", "provider", "lastActivityAt")
-            VALUES (?, ?, NULL, ?, ?)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT("id") DO UPDATE SET
               "createdAt" = excluded."createdAt",
               "lastActivityAt" = excluded."lastActivityAt"
             """, arguments: Self.args([order.id, order.created.timeIntervalSince1970,
-                            provider, Date.now.timeIntervalSince1970]))
+                            providerAccountRef, provider,
+                            Date.now.timeIntervalSince1970]))
     }
 
     private static func insertStops(of order: Order, into db: Database, upsert: Bool) throws {
@@ -367,7 +389,9 @@ public nonisolated final class AppDatabase: Sendable {
 
     public func readPlaces() throws -> [SavedPlace] {
         try queue.read { db in
-            try Row.fetchAll(db, sql: "SELECT * FROM \"savedPlaces\"").map { row in
+            try Row.fetchAll(db, sql: """
+                SELECT * FROM "savedPlaces" ORDER BY "rowid"
+                """).map { row in
                 SavedPlace(
                     id: row["id"], name: row["name"],
                     kind: SavedPlace.Kind(rawValue: row["kind"]) ?? .other,
