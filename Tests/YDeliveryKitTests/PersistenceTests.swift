@@ -580,4 +580,95 @@ struct PersistenceTests {
         #expect(stored.point.contactName == "Иван")
         #expect(stored.point.contactPhone == "+7912")
     }
+
+    // MARK: Custom fields — the «Ваши поля» schema and its values
+
+    @Test("Field definitions round-trip in schema order")
+    func fieldDefinitionsRoundTrip() throws {
+        let database = makeDatabase()
+        let a = CustomFieldDefinition(
+            name: "Заказ", isOptional: false, carrier: .orderNumber, position: 0)
+        let b = CustomFieldDefinition(
+            name: "Тип груза", kind: .choice, choices: ["Документы", "Коробка"],
+            position: 1)
+
+        try database.saveFieldDefinition(a)
+        try database.saveFieldDefinition(b)
+
+        let stored = try database.fieldDefinitions()
+        #expect(stored.map(\.name) == ["Заказ", "Тип груза"])
+        #expect(stored[0].isShownByDefault,
+                "required ⇒ shown by default — the store normalizes the trap")
+        #expect(stored[1].choices == ["Документы", "Коробка"])
+    }
+
+    @Test("One claimant per carrier slot")
+    func carrierSlotIsExclusive() throws {
+        let database = makeDatabase()
+        try database.saveFieldDefinition(
+            CustomFieldDefinition(name: "Заказ", carrier: .orderNumber, position: 0))
+
+        #expect(throws: AppDatabase.WriteError.fieldCarrierTaken) {
+            try database.saveFieldDefinition(
+                CustomFieldDefinition(name: "Номер", carrier: .orderNumber, position: 1))
+        }
+        // Re-saving the claimant itself is fine — only a *second* claim refuses.
+        try database.saveFieldDefinition(
+            CustomFieldDefinition(
+                id: try #require(database.fieldDefinitions().first).id,
+                name: "Заказ", carrier: .orderNumber, position: 0))
+    }
+
+    @Test("Field values record with the order, survive later updates, and replace")
+    func fieldValueLifecycle() throws {
+        let database = makeDatabase()
+        let order = Order(
+            created: .now, status: .searching,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")],
+            claimID: "claim-f")
+        let def = CustomFieldDefinition(name: "Заказ", position: 0)
+        try database.saveFieldDefinition(def)
+        let fields = [OrderCustomField(
+            orderID: order.id, fieldRef: def.id, name: "Заказ", value: "4417")]
+
+        try database.recordOrder(order, customFields: fields)
+        #expect(try database.orderCustomFields(orderID: order.id).map(\.value) == ["4417"])
+        #expect(try database.allOrderCustomFields().count == 1)
+
+        // A status update passing nothing leaves the values alone — a cancel must
+        // never erase «Заказ 4417» off the record.
+        var updated = order
+        updated.status = .cancelled
+        try database.recordOrder(updated)
+        #expect(try database.orderCustomFields(orderID: order.id).map(\.value) == ["4417"])
+
+        // An explicit set replaces wholesale — the draft owns all of them.
+        try database.recordOrder(updated, customFields: [
+            OrderCustomField(orderID: order.id, fieldRef: def.id, name: "Заказ", value: "4418"),
+        ])
+        let stored = try database.orderCustomFields(orderID: order.id)
+        #expect(stored.map(\.value) == ["4418"])
+        #expect(stored.first?.id == fields.first?.id,
+                "the id derives from order‖field — an edit updates in place")
+    }
+
+    @Test("A value outlives its definition — the name snapshot renders it")
+    func orphanedValueKeepsItsName() throws {
+        let database = makeDatabase()
+        let def = CustomFieldDefinition(name: "Накладная", position: 0)
+        try database.saveFieldDefinition(def)
+        let order = Order(
+            created: .now, status: .done,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")])
+        try database.recordOrder(order, customFields: [
+            OrderCustomField(orderID: order.id, fieldRef: def.id,
+                             name: "Накладная", value: "77"),
+        ])
+
+        try database.deleteFieldDefinition(id: def.id)
+
+        let stored = try #require(database.orderCustomFields(orderID: order.id).first)
+        #expect(stored.name == "Накладная")
+        #expect(stored.value == "77")
+    }
 }

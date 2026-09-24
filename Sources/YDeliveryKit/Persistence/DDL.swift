@@ -50,6 +50,12 @@ nonisolated extension AppDatabase {
           "sizeLengthCm" REAL, "sizeWidthCm" REAL, "sizeHeightCm" REAL,
           "pickupStopRef" TEXT, "dropoffStopRef" TEXT
         ) STRICT;
+        CREATE TABLE IF NOT EXISTS "\(OrderCustomFieldRow.tableName)" (
+          "id" TEXT PRIMARY KEY NOT NULL ON CONFLICT REPLACE DEFAULT (uuid()),
+          "orderID" TEXT NOT NULL
+            REFERENCES "\(OrderRow.tableName)"("id") ON DELETE CASCADE,
+          "fieldRef" TEXT NOT NULL, "name" TEXT NOT NULL, "value" TEXT NOT NULL
+        ) STRICT;
         CREATE TABLE IF NOT EXISTS "\(ProviderEventRow.tableName)" (
           "id" TEXT PRIMARY KEY NOT NULL,
           "orderID" TEXT NOT NULL
@@ -96,6 +102,13 @@ nonisolated extension AppDatabase {
           "entrance" TEXT, "floor" TEXT, "apartment" TEXT, "intercom" TEXT,
           "contactName" TEXT, "contactGivenName" TEXT, "contactFamilyName" TEXT,
           "contactPhone" TEXT, "contactPhoneExtension" TEXT
+        ) STRICT;
+        CREATE TABLE IF NOT EXISTS "\(CustomFieldDefinitionRow.tableName)" (
+          "id" TEXT PRIMARY KEY NOT NULL ON CONFLICT REPLACE DEFAULT (uuid()),
+          "name" TEXT NOT NULL, "kind" TEXT NOT NULL,
+          "choicesJSON" TEXT NOT NULL,
+          "isOptional" INTEGER NOT NULL, "isShownByDefault" INTEGER NOT NULL,
+          "carrier" TEXT NOT NULL, "position" INTEGER NOT NULL
         ) STRICT;
         CREATE TABLE IF NOT EXISTS "\(SyncStateRow.tableName)" (
           "providerAccountRef" TEXT PRIMARY KEY NOT NULL,
