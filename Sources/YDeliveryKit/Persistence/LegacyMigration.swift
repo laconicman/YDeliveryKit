@@ -69,13 +69,18 @@ nonisolated enum LegacyMigration {
         migrate(file: "claims-sync.json", in: directory, decode: {
             try JSONDecoder().decode(FileSyncState.self, from: $0)
         }, insert: { state, db in
+            // The file carries no account identity — its boundary was the sign-out
+            // wipe, not a column. `historyBackfilled` therefore never migrates: it
+            // is the one value a foreign file could use to suppress work the new
+            // account owes, and it cannot self-heal. The cursor can (a wrong one
+            // earns `invalid_cursor` → replay) and pending ids are verifiable
+            // fetches — both ride; the backfill runs once, idempotent, either way.
             try db.execute(sql: """
                 INSERT OR IGNORE INTO "syncStates"
                   ("providerAccountRef", "journalCursor", "historyBackfilled")
-                VALUES (?, ?, ?)
+                VALUES (?, ?, 0)
                 """, arguments: AppDatabase.args([
                     providerAccountRef, state.cursor,
-                    state.historyBackfilled ? 1 : 0,
                 ]))
             for claimID in state.pendingClaimIDs ?? [] {
                 try db.execute(sql: """

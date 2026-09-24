@@ -559,7 +559,8 @@ struct PersistenceTests {
 
         let state = database.readSyncState()
         #expect(state.cursor == "eyJ-opaque")
-        #expect(state.historyBackfilled)
+        #expect(!state.historyBackfilled,
+                "the file has no account identity — a foreign flag must not suppress this account's backfill; one rescan is the price")
         #expect(state.pendingClaimIDs == ["claim-a", "claim-b"])
     }
 
