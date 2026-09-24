@@ -671,4 +671,86 @@ struct PersistenceTests {
         #expect(stored.name == "Накладная")
         #expect(stored.value == "77")
     }
+
+    // MARK: Provider events — the owner-written feed
+
+    @Test("An event records once — its replay is news to nobody")
+    func providerEventDeduplicates() throws {
+        let database = makeDatabase()
+        let order = Order(
+            created: .now, status: .active,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")],
+            claimID: "claim-e")
+        try database.recordOrder(order)
+        let event = ProviderEvent(
+            orderID: order.id, providerEventID: 7, at: .now,
+            kind: "status", providerStatus: "performer_found", source: "journal")
+
+        #expect(try database.recordProviderEvent(event))
+        #expect(try !database.recordProviderEvent(event),
+                "a replayed feed id merges by key — the notification layer reads false as silence")
+        #expect(try database.providerEvents(orderID: order.id).count == 1)
+    }
+
+    @Test("A status event writes the mirror's provider columns — dedupe is per key")
+    func providerEventUpdatesMirror() throws {
+        let database = makeDatabase()
+        let order = Order(
+            created: .now, status: .active,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")],
+            claimID: "claim-m")
+        try database.recordOrder(order)
+
+        try database.recordProviderEvent(ProviderEvent(
+            orderID: order.id, providerEventID: 3,
+            at: Date(timeIntervalSince1970: 1000),
+            kind: "status", providerStatus: "delivery_arrived", source: "journal"))
+        // A second event with an older stamp and its own feed id is *new* to the
+        // store — dedupe is per-key and ordering is the feed's job, so the mirror
+        // takes it. The journal delivers in provider order; this only matters
+        // when a caller writes out of order.
+        try database.recordProviderEvent(ProviderEvent(
+            orderID: order.id, providerEventID: 2,
+            at: Date(timeIntervalSince1970: 900),
+            kind: "status", providerStatus: "pickuped", source: "journal"))
+        #expect(try database.providerEvents(orderID: order.id).map(\.providerStatus)
+                == ["pickuped", "delivery_arrived"],
+                "events read oldest-first by stamp, not by arrival")
+
+        let status: String? = try database.queue.read { db in
+            try Row.fetchOne(db, sql: """
+                SELECT "providerStatus" FROM "orderProviderStates" WHERE "orderID" = ?
+                """, arguments: AppDatabase.args([order.id]))
+                .map { $0["providerStatus"] }
+        }
+        #expect(status == "pickuped", "the last newly recorded event owns the mirror")
+    }
+
+    @Test("An event bumps the order's activity without ever rewinding it")
+    func providerEventMovesActivityForwardOnly() throws {
+        let database = makeDatabase()
+        let order = Order(
+            created: .now, status: .active,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")],
+            claimID: "claim-a")
+        try database.recordOrder(order)
+        // record() itself stamps "now" — the events must sit either side of it.
+        let later = Date.now.addingTimeInterval(60)
+        let earlier = Date.now.addingTimeInterval(-3600)
+
+        try database.recordProviderEvent(ProviderEvent(
+            orderID: order.id, providerEventID: 1,
+            at: later, kind: "status", source: "journal"))
+        try database.recordProviderEvent(ProviderEvent(
+            orderID: order.id, providerEventID: 2,
+            at: earlier, kind: "status", source: "journal"))
+
+        let activity: Double = try database.queue.read { db in
+            try Row.fetchOne(db, sql: """
+                SELECT "lastActivityAt" FROM "orders" WHERE "id" = ?
+                """, arguments: AppDatabase.args([order.id]))?["lastActivityAt"] ?? 0
+        }
+        #expect(activity == later.timeIntervalSince1970,
+                "the older event is history, not the newest activity")
+    }
 }

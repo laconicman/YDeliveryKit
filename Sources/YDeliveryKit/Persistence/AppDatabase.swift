@@ -605,6 +605,74 @@ public nonisolated final class AppDatabase: Sendable {
             name: row["name"], value: row["value"])
     }
 
+    // MARK: - Provider events
+
+    /// Records one provider-reported change. The row's derived id makes a replayed
+    /// event a no-op — `false` — so callers can treat *inserted* as *news* (a
+    /// cursor reset replays the feed without re-firing the notification layer).
+    ///
+    /// A fresh event that carries a status is also the mirror's promised "sync
+    /// writer": `providerStatus`, `providerDetail` and the sighting stamp update
+    /// where the collapsed `status` alone cannot speak. Replays never touch the
+    /// mirror — an old event must not regress it. `lastActivityAt` moves forward
+    /// only: a late-arriving event is history, not the newest activity.
+    @discardableResult
+    public func recordProviderEvent(_ event: ProviderEvent) throws -> Bool {
+        try queue.write { db in
+            try db.execute(sql: """
+                INSERT OR IGNORE INTO "providerEvents"
+                  ("id", "orderID", "providerEventID", "at", "kind",
+                   "providerStatus", "detail", "source")
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, arguments: Self.args([
+                    event.id, event.orderID, event.providerEventID,
+                    event.at.timeIntervalSince1970, event.kind,
+                    event.providerStatus, event.detail, event.source,
+                ]))
+            guard db.changesCount > 0 else { return false }
+            if event.providerStatus != nil || event.detail != nil {
+                try db.execute(sql: """
+                    UPDATE "orderProviderStates" SET
+                      "providerStatus" = COALESCE(?, "providerStatus"),
+                      "providerDetail" = COALESCE(?, "providerDetail"),
+                      "providerObservedAt" = ?
+                    WHERE "orderID" = ?
+                    """, arguments: Self.args([
+                        event.providerStatus, event.detail,
+                        event.at.timeIntervalSince1970, event.orderID,
+                    ]))
+            }
+            try db.execute(sql: """
+                UPDATE "orders" SET "lastActivityAt" = MAX("lastActivityAt", ?)
+                WHERE "id" = ?
+                """, arguments: Self.args([event.at.timeIntervalSince1970, event.orderID]))
+            return true
+        }
+    }
+
+    /// One order's provider history, oldest first — the timeline the detail view
+    /// and the notification audit trail both read.
+    public func providerEvents(orderID: Order.ID) throws -> [ProviderEvent] {
+        try queue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT * FROM "providerEvents"
+                WHERE "orderID" = ? ORDER BY "at", "id"
+                """, arguments: Self.args([orderID])).map(Self.providerEvent)
+        }
+    }
+
+    private static func providerEvent(_ row: Row) -> ProviderEvent {
+        ProviderEvent(
+            id: row["id"],
+            orderID: row["orderID"],
+            providerEventID: row["providerEventID"],
+            at: Date(timeIntervalSince1970: row["at"]),
+            kind: row["kind"],
+            providerStatus: row["providerStatus"],
+            detail: row["detail"],
+            source: row["source"])
+    }
+
     // MARK: - Sync state (device tier)
 
     /// The stored state, defaulting to *start over*: absent and unreadable both read
