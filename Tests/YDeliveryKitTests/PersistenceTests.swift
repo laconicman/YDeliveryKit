@@ -146,9 +146,10 @@ struct PersistenceTests {
 
     // MARK: Engine start — failure surfacing
 
-    /// The gate must pass on every host we ship or test on — on the simulator there
-    /// is no embedded profile, which reads as *proceed* (runtime entitlements come
-    /// from the xcent, so the only case it gates is a mismatched device profile).
+    /// The gate must pass on every host we ship or test on. On the simulator there
+    /// is no embedded profile — and there never could be a meaningful signature
+    /// check either, since Xcode strips restricted entitlements from simulator
+    /// signatures. On device, a missing profile fails closed.
     @Test("The entitlement gate passes on this host")
     func iCloudEntitlementGatePasses() {
         #expect(makeDatabase().iCloudEntitled)
