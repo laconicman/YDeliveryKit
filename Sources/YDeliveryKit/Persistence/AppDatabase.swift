@@ -265,9 +265,12 @@ public nonisolated final class AppDatabase: Sendable {
     }
 
     /// The single write funnel for both UI and sync-merge writes. `providerObservedAt`
-    /// marks a provider *sighting* — callers that just talked to the wire pass it;
-    /// local writes leave it nil so the mirror never fabricates freshness. The mirror
-    /// upsert touches only the fields the flat `Order` owns — provider-side columns
+    /// is the provider's own as-of stamp — the claim's `updatedTs`, not the read's
+    /// clock — so a delayed answer can't masquerade as fresher than a journal event
+    /// it predates. Callers that just talked to the wire pass it; local writes leave
+    /// it nil so the mirror never fabricates freshness. The stamp is monotonic: a
+    /// stale merge may not rewind what a fresher one already saw. The mirror upsert
+    /// touches only the fields the flat `Order` owns — provider-side columns
     /// (`providerStatus`, `providerDetail`, `dueAt`, `finishedAt`) belong to the sync
     /// writer and survive a UI rewrite.
     ///
@@ -317,8 +320,13 @@ public nonisolated final class AppDatabase: Sendable {
                   "tariff" = excluded."tariff",
                   "price" = excluded."price",
                   "currency" = excluded."currency",
-                  "providerObservedAt" =
-                    COALESCE(excluded."providerObservedAt", "providerObservedAt"),
+                  "providerObservedAt" = CASE
+                    WHEN excluded."providerObservedAt" IS NULL
+                      THEN "providerObservedAt"
+                    WHEN "providerObservedAt" IS NULL
+                      THEN excluded."providerObservedAt"
+                    ELSE MAX("providerObservedAt", excluded."providerObservedAt")
+                  END,
                   "mirroredAt" = excluded."mirroredAt"
                 """, arguments: Self.args([
                     order.id, order.claimID, order.status.rawValue,

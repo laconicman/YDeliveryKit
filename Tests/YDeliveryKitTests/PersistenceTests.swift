@@ -341,6 +341,31 @@ struct PersistenceTests {
         #expect(observed != nil, "a sighting survives the local write — freshness is never erased")
     }
 
+    /// The stamp is the provider's own as-of time, so it is monotonic: a merge
+    /// whose claim predates what the journal already saw must not rewind the
+    /// clock and gate later events out of the status mirror.
+    @Test("A stale merge cannot rewind providerObservedAt")
+    func staleMergeCannotRewindObservedAt() throws {
+        let database = makeDatabase()
+        let order = Order(created: .now, status: .active, route: [], claimID: "claim-8")
+        let fresh = Date.now
+        let stale = fresh.addingTimeInterval(-600)
+
+        try database.recordOrder(order, providerObservedAt: fresh)
+        var refetched = order
+        refetched.price = "910.00"
+        try database.recordOrder(refetched, providerObservedAt: stale)
+
+        let observed: Double? = try database.queue.read {
+            let row = try Row.fetchOne($0, sql: """
+                SELECT "providerObservedAt" FROM "orderProviderStates" WHERE "orderID" = ?
+                """, arguments: AppDatabase.args([order.id]))
+            return row?["providerObservedAt"]
+        }
+        #expect(observed == fresh.timeIntervalSince1970,
+                "the fresher stamp holds — a stale answer describes older provider truth")
+    }
+
     // MARK: Saved places — the editor's semantics
 
     /// The 3e editor's hazard, pinned: retargeting a saved place onto a destination
