@@ -119,15 +119,25 @@ nonisolated enum LegacyMigration {
             if let remainder {
                 // Content-named, not timestamped: an interruption after this write
                 // re-derives the same file on retry — a pending artifact must be
-                // idempotent, or every reopen accumulates duplicates.
+                // idempotent, or every reopen accumulates duplicates. A tag match
+                // with *different* bytes is the (astronomically rare) collision —
+                // keep the existing file and sidecar the new one, never overwrite.
                 let encoder = JSONEncoder()
                 encoder.outputFormatting = [.sortedKeys]  // stable bytes — the name must be
                 let remainderData = try encoder.encode(remainder)
                 let tag = Insecure.SHA1.hash(data: remainderData)
                     .prefix(6).map { String(format: "%02x", $0) }.joined()
-                let pending = source.deletingPathExtension()
+                var pending = source.deletingPathExtension()
                     .appendingPathExtension("pending-\(tag).json")
-                try remainderData.write(to: pending, options: .atomic)
+                if let existing = try? Data(contentsOf: pending), existing == remainderData {
+                    // Already separated — identical content needs no second write.
+                } else {
+                    if FileManager.default.fileExists(atPath: pending.path) {
+                        pending = source.deletingPathExtension().appendingPathExtension(
+                            "pending-\(tag)-\(UUID().uuidString.prefix(8)).json")
+                    }
+                    try remainderData.write(to: pending, options: .atomic)
+                }
                 logger.error("\(name) held rows the substrate refuses — separated to \(pending.lastPathComponent, privacy: .public) until those rows have a home")
             }
             let migrated = source.deletingPathExtension()
