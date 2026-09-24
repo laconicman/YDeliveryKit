@@ -22,13 +22,20 @@ let package = Package(
     dependencies: [
         // Compile-checked SF Symbol names (TechDebt → YD-3); the demo repo already
         // depends on it, so this is alignment, not a new precedent.
-        .package(url: "https://github.com/SFSafeSymbols/SFSafeSymbols", from: "7.0.0")
+        .package(url: "https://github.com/SFSafeSymbols/SFSafeSymbols", from: "7.0.0"),
+        // The SQLite substrate + CloudKit SyncEngine — extensions read and write
+        // through the same `AppDatabase` as the app. sqlite-data re-exports
+        // StructuredQueriesSQLite; GRDB carries DatabaseQueue/Row/StatementArguments.
+        .package(url: "https://github.com/pointfreeco/sqlite-data", from: "1.12.0"),
+        .package(url: "https://github.com/groue/GRDB.swift", from: "7.11.0"),
     ],
     targets: [
         .target(
             name: "YDeliveryKit",
             dependencies: [
-                .product(name: "SFSafeSymbols", package: "SFSafeSymbols")
+                .product(name: "SFSafeSymbols", package: "SFSafeSymbols"),
+                .product(name: "SQLiteData", package: "sqlite-data"),
+                .product(name: "GRDB", package: "GRDB.swift"),
             ],
             swiftSettings: [
                 .defaultIsolation(MainActor.self),
