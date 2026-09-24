@@ -265,15 +265,24 @@ public nonisolated final class AppDatabase: Sendable {
     }
 
     /// The single write funnel for both UI and sync-merge writes. `providerObservedAt`
-    /// marks a provider *sighting* — callers that just talked to the wire pass it;
-    /// local writes leave it nil so the mirror never fabricates freshness. The mirror
-    /// upsert touches only the fields the flat `Order` owns — provider-side columns
+    /// is the provider's own as-of stamp — the claim's `updatedTs`, not the read's
+    /// clock — so a delayed answer can't masquerade as fresher than a journal event
+    /// it predates. Callers that just talked to the wire pass it; local writes leave
+    /// it nil so the mirror never fabricates freshness. The stamp is monotonic: a
+    /// stale merge may not rewind what a fresher one already saw. The mirror upsert
+    /// touches only the fields the flat `Order` owns — provider-side columns
     /// (`providerStatus`, `providerDetail`, `dueAt`, `finishedAt`) belong to the sync
     /// writer and survive a UI rewrite.
     ///
     /// `customFields` is tri-state: `nil` (the default) leaves the order's field
     /// values untouched — a status update must not wipe «Заказ 4417» — while a
     /// non-nil value *replaces* the set wholesale (the draft owns all of them).
+    ///
+    /// A stamped write is a provider *merge*: it applies only while its as-of
+    /// stamp is at least as new as the stored observation — a delayed answer
+    /// describes older provider truth and must not regress any of the fields it
+    /// carries, route included (review, PR #7). Unstamped writes are local
+    /// edits and always apply.
     public func recordOrder(_ order: Order, customFields: [OrderCustomField]? = nil,
                             providerObservedAt: Date? = nil) throws {
         // A draft is not an order — it has no provider existence, and writing one
@@ -281,6 +290,13 @@ public nonisolated final class AppDatabase: Sendable {
         // shareable delivery. Parked drafts live in `orderDrafts`, device-tier.
         guard order.status != .draft else { throw WriteError.draftHasNoProviderExistence }
         try queue.write { db in
+            if let stamp = providerObservedAt?.timeIntervalSince1970,
+               try Bool.fetchOne(db, sql: """
+                   SELECT "providerObservedAt" > ? FROM "orderProviderStates"
+                   WHERE "orderID" = ?
+                   """, arguments: Self.args([stamp, order.id])) == true {
+                return
+            }
             try Self.upsert(order, provider: provider,
                             providerAccountRef: providerAccountRef, into: db)
             try db.execute(sql: """
@@ -317,8 +333,13 @@ public nonisolated final class AppDatabase: Sendable {
                   "tariff" = excluded."tariff",
                   "price" = excluded."price",
                   "currency" = excluded."currency",
-                  "providerObservedAt" =
-                    COALESCE(excluded."providerObservedAt", "providerObservedAt"),
+                  "providerObservedAt" = CASE
+                    WHEN excluded."providerObservedAt" IS NULL
+                      THEN "providerObservedAt"
+                    WHEN "providerObservedAt" IS NULL
+                      THEN excluded."providerObservedAt"
+                    ELSE MAX("providerObservedAt", excluded."providerObservedAt")
+                  END,
                   "mirroredAt" = excluded."mirroredAt"
                 """, arguments: Self.args([
                     order.id, order.claimID, order.status.rawValue,
@@ -608,8 +629,13 @@ public nonisolated final class AppDatabase: Sendable {
     // MARK: - Provider events
 
     /// Records one provider-reported change. The row's derived id makes a replayed
-    /// event a no-op — `false` — so callers can treat *inserted* as *news* (a
-    /// cursor reset replays the feed without re-firing the notification layer).
+    /// event a no-op — `inserted` false — so callers can treat insertion as *news*
+    /// (a cursor reset replays the feed without re-firing the notification layer).
+    /// `statusAdvanced` is the tighter signal the notification layer announces:
+    /// true only when a *new* timeline row moved the mirror's provider word to
+    /// this event's — a replayed event, a sighting of the same word, a stale
+    /// event, or a non-status change does not re-announce what the sender
+    /// already saw (review, PR #7).
     ///
     /// The mirror is a separate concern from the timeline, governed by freshness
     /// rather than insertion (review, PR #6): a status-bearing event updates
@@ -622,7 +648,7 @@ public nonisolated final class AppDatabase: Sendable {
     /// previous observation's, and a non-status event's detail never poses as
     /// the status's own. `lastActivityAt` moves forward only.
     @discardableResult
-    public func recordProviderEvent(_ event: ProviderEvent) throws -> Bool {
+    public func recordProviderEvent(_ event: ProviderEvent) throws -> ProviderEventOutcome {
         try queue.write { db in
             try db.execute(sql: """
                 INSERT OR IGNORE INTO "providerEvents"
@@ -635,7 +661,12 @@ public nonisolated final class AppDatabase: Sendable {
                     event.providerStatus, event.detail, event.source,
                 ]))
             let inserted = db.changesCount > 0
+            var statusAdvanced = false
             if event.providerStatus != nil {
+                let previous: String? = try Row.fetchOne(db, sql: """
+                    SELECT "providerStatus" FROM "orderProviderStates"
+                    WHERE "orderID" = ?
+                    """, arguments: Self.args([event.orderID]))?["providerStatus"]
                 try db.execute(sql: """
                     UPDATE "orderProviderStates" SET
                       "providerStatus" = ?,
@@ -648,6 +679,15 @@ public nonisolated final class AppDatabase: Sendable {
                         event.at.timeIntervalSince1970, event.orderID,
                         event.at.timeIntervalSince1970,
                     ]))
+                // The WHERE gate is the freshness check — a stale event updates
+                // zero rows — and only a word that differs from the stored one
+                // counts as the status having moved. `inserted` joins the gate
+                // because a replayed row can overwrite the mirror at an equal
+                // stamp — the feed's tiebreak is arrival order — without being
+                // news: re-announcing it would ping-pong banners on a cursor
+                // reset (review, PR #7).
+                statusAdvanced = inserted && db.changesCount > 0
+                    && previous != event.providerStatus
             }
             if inserted {
                 try db.execute(sql: """
@@ -655,7 +695,8 @@ public nonisolated final class AppDatabase: Sendable {
                     WHERE "id" = ?
                     """, arguments: Self.args([event.at.timeIntervalSince1970, event.orderID]))
             }
-            return inserted
+            return ProviderEventOutcome(
+                inserted: inserted, statusAdvanced: statusAdvanced)
         }
     }
 

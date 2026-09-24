@@ -50,3 +50,20 @@ public nonisolated struct ProviderEvent: Codable, Hashable, Identifiable, Sendab
         self.source = source
     }
 }
+
+/// What recording one provider event changed — the two facts a consumer needs
+/// to decide whether the wire said something new. `inserted` is "new to the
+/// timeline": a replayed feed id or repeated sighting reports `false`. The
+/// stronger `statusAdvanced` is "the mirror's provider word moved to this
+/// event's": the transition a notification announces. A replay, a stale event,
+/// and a re-sighting of the same word all report `false` — only a genuinely
+/// new provider observation of a *different* status advances.
+public nonisolated struct ProviderEventOutcome: Sendable, Equatable {
+    public var inserted: Bool
+    public var statusAdvanced: Bool
+
+    public init(inserted: Bool, statusAdvanced: Bool) {
+        self.inserted = inserted
+        self.statusAdvanced = statusAdvanced
+    }
+}

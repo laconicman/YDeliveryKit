@@ -341,6 +341,35 @@ struct PersistenceTests {
         #expect(observed != nil, "a sighting survives the local write — freshness is never erased")
     }
 
+    /// The stamp is the provider's own as-of time, so it is monotonic: a merge
+    /// whose claim predates what the journal already saw must not rewind the
+    /// clock and gate later events out of the status mirror.
+    @Test("A stale merge rewinds nothing — not the stamp, not the fields it carries")
+    func staleMergeCannotRewindObservedAt() throws {
+        let database = makeDatabase()
+        var order = Order(created: .now, status: .active, route: [], claimID: "claim-8")
+        order.price = "950.00"
+        let fresh = Date.now
+        let stale = fresh.addingTimeInterval(-600)
+
+        try database.recordOrder(order, providerObservedAt: fresh)
+        var refetched = order
+        refetched.price = "910.00"
+        try database.recordOrder(refetched, providerObservedAt: stale)
+
+        let mirror = try database.queue.read {
+            try Row.fetchOne($0, sql: """
+                SELECT "providerObservedAt", "price" FROM "orderProviderStates"
+                WHERE "orderID" = ?
+                """, arguments: AppDatabase.args([order.id]))
+        }
+        #expect(mirror?["providerObservedAt"] == fresh.timeIntervalSince1970,
+                "the fresher stamp holds — a stale answer describes older provider truth")
+        let price: String? = mirror?["price"]
+        #expect(price == "950.00",
+                "the stale answer's fields were never written beside the fresh stamp")
+    }
+
     // MARK: Saved places — the editor's semantics
 
     /// The 3e editor's hazard, pinned: retargeting a saved place onto a destination
@@ -686,10 +715,104 @@ struct PersistenceTests {
             orderID: order.id, providerEventID: 7, at: .now,
             kind: "status", providerStatus: "performer_found", source: "journal")
 
-        #expect(try database.recordProviderEvent(event))
-        #expect(try !database.recordProviderEvent(event),
+        #expect(try database.recordProviderEvent(event).inserted)
+        #expect(try !database.recordProviderEvent(event).inserted,
                 "a replayed feed id merges by key — the notification layer reads false as silence")
         #expect(try database.providerEvents(orderID: order.id).count == 1)
+    }
+
+    /// The notification layer's question, answered by the database: did this
+    /// event move the order to a provider word the sender hasn't been told?
+    /// A replay didn't, a stale event didn't, and a re-sighting of the same
+    /// word didn't — only a fresh observation of a different word did.
+    @Test("statusAdvanced is the transition signal — replays and re-sightings don't fire it")
+    func statusAdvancedMarksRealTransitions() throws {
+        let database = makeDatabase()
+        let order = Order(
+            created: .now, status: .active,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")],
+            claimID: "claim-t")
+        try database.recordOrder(order)
+
+        let found = ProviderEvent(
+            orderID: order.id, providerEventID: 1,
+            at: Date(timeIntervalSince1970: 1000),
+            kind: "status", providerStatus: "performer_found", source: "journal")
+        #expect(try database.recordProviderEvent(found) ==
+                ProviderEventOutcome(inserted: true, statusAdvanced: true),
+                "a new status word advances the mirror")
+        #expect(try database.recordProviderEvent(found) ==
+                ProviderEventOutcome(inserted: false, statusAdvanced: false),
+                "the replay inserts nothing and announces nothing")
+
+        // The same word sighted through a different feed is a *new timeline
+        // row* — dedupe is per (status, source) — but not a new status:
+        // «courier found» must not banner twice because search saw it too.
+        #expect(try database.recordProviderEvent(ProviderEvent(
+            orderID: order.id,
+            at: Date(timeIntervalSince1970: 1200),
+            kind: "sighting", providerStatus: "performer_found", source: "search")) ==
+                ProviderEventOutcome(inserted: true, statusAdvanced: false),
+                "the same word from another feed lands on the timeline silently")
+
+        // A stale event is history — it inserts, it does not announce.
+        #expect(try database.recordProviderEvent(ProviderEvent(
+            orderID: order.id, providerEventID: 0,
+            at: Date(timeIntervalSince1970: 500),
+            kind: "status", providerStatus: "accepted", source: "journal")) ==
+                ProviderEventOutcome(inserted: true, statusAdvanced: false),
+                "an event older than the mirror's observation is timeline-only")
+
+        // And a genuinely new word through the sighting path fires — the
+        // journal's gap is exactly what sightings backstop.
+        #expect(try database.recordProviderEvent(ProviderEvent(
+            orderID: order.id,
+            at: Date(timeIntervalSince1970: 1400),
+            kind: "sighting", providerStatus: "delivery_arrived", source: "card")) ==
+                ProviderEventOutcome(inserted: true, statusAdvanced: true))
+    }
+
+    /// Two transitions stamped at the same instant both belong on the timeline,
+    /// but on replay neither may re-announce: the freshness gate passes equal
+    /// stamps, so without `inserted` a cursor-reset replay would ping-pong
+    /// banners between the two words (review, PR #7).
+    @Test("Equal-time status replays never re-announce")
+    func equalTimeReplaysStaySilent() throws {
+        let database = makeDatabase()
+        let order = Order(
+            created: .now, status: .active,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")],
+            claimID: "claim-eq")
+        try database.recordOrder(order)
+
+        let t = Date(timeIntervalSince1970: 1000)
+        let accepted = ProviderEvent(
+            orderID: order.id, providerEventID: 1, at: t,
+            kind: "status", providerStatus: "accepted", source: "journal")
+        let found = ProviderEvent(
+            orderID: order.id, providerEventID: 2, at: t,
+            kind: "status", providerStatus: "performer_found", source: "journal")
+
+        #expect(try database.recordProviderEvent(accepted).statusAdvanced)
+        #expect(try database.recordProviderEvent(found).statusAdvanced,
+                "a genuinely new word announces even at an equal stamp")
+
+        // Cursor-reset replay: both rows dedupe — neither can announce again.
+        #expect(try database.recordProviderEvent(accepted) ==
+                ProviderEventOutcome(inserted: false, statusAdvanced: false),
+                "replaying the first equal-time word must not re-announce it")
+        #expect(try database.recordProviderEvent(found) ==
+                ProviderEventOutcome(inserted: false, statusAdvanced: false))
+
+        // Replays arrive in feed order, so the equal-time tie resolves the same
+        // way every pass — the mirror lands on the last feed word, unchanged.
+        let mirror: Row? = try database.queue.read { db in
+            try Row.fetchOne(db, sql: """
+                SELECT "providerStatus" FROM "orderProviderStates" WHERE "orderID" = ?
+                """, arguments: AppDatabase.args([order.id]))
+        }
+        let status: String? = mirror?["providerStatus"]
+        #expect(status == "performer_found")
     }
 
     @Test("A status event writes the mirror — but an older event can't rewind it")
@@ -750,7 +873,7 @@ struct PersistenceTests {
         #expect(try !database.recordProviderEvent(ProviderEvent(
             orderID: order.id, at: Date(timeIntervalSince1970: 1300),
             kind: "status", providerStatus: "delivery_arrived",
-            detail: "courier called", source: "card")),
+            detail: "courier called", source: "card")).inserted,
                 "same status from the same source is the same sighting — no second row")
         #expect(try database.providerEvents(orderID: order.id).count == 1)
 
