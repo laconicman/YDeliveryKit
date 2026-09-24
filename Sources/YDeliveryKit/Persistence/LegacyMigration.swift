@@ -40,13 +40,15 @@ nonisolated enum LegacyMigration {
         migrate(file: "orders.json", in: directory, decode: {
             try JSONDecoder().decode([Order].self, from: $0)
         }, insert: { orders, db in
-            for order in orders where order.status != .draft {
+            var skipped = 0
+            for order in orders {
+                // A draft has no provider existence — the shared tier refuses it
+                // and `orderDrafts` is skeletal (no route columns), so the only
+                // honest destination today is the file itself, kept in place.
+                if order.status == .draft { skipped += 1; continue }
                 try AppDatabase.insertMigrating(order, provider: provider, into: db)
             }
-            let drafts = orders.filter { $0.status == .draft }
-            if !drafts.isEmpty {
-                logger.error("Skipped \(drafts.count) draft row(s) in orders.json — drafts have no provider existence and no place in the shared tier")
-            }
+            return skipped
         }, db: db)
     }
 
@@ -57,6 +59,7 @@ nonisolated enum LegacyMigration {
             for place in places {
                 try insert(place, into: db)
             }
+            return 0
         }, db: db)
     }
 
@@ -86,16 +89,20 @@ nonisolated enum LegacyMigration {
                         Date.now.timeIntervalSince1970,
                     ]))
             }
+            return 0
         }, db: db)
     }
 
     /// One source's decode → transaction → rename. `INSERT OR IGNORE` on derived keys
-    /// is what makes a crash in the commit→rename window safe to retry.
+    /// is what makes a crash in the commit→rename window safe to retry. `insert`
+    /// returns the row count the substrate *refused* (drafts today) — a partial
+    /// import leaves the file in place, because those rows' only home is still the
+    /// file itself.
     private static func migrate<Payload>(
         file name: String,
         in directory: URL,
         decode: (Data) throws -> Payload,
-        insert: (Payload, Database) throws -> Void,
+        insert: (Payload, Database) throws -> Int,
         db: DatabaseQueue
     ) {
         let source = directory.appendingPathComponent(name)
@@ -106,7 +113,11 @@ nonisolated enum LegacyMigration {
         do {
             let data = try Data(contentsOf: source)
             let payload = try decode(data)
-            try db.write { db in try insert(payload, db) }
+            let skipped = try db.write { db in try insert(payload, db) }
+            if skipped > 0 {
+                logger.error("\(name) held \(skipped) row(s) the substrate refuses — file left in place as the recovery path until those rows have a home")
+                return
+            }
             let migrated = source.deletingPathExtension()
                 .appendingPathExtension(
                     "migrated-\(markerTimestamp)-\(UUID().uuidString.prefix(8)).json")

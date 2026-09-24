@@ -473,6 +473,29 @@ struct PersistenceTests {
         #expect(stopCount == 1, "a second pass reproduces identical keys and writes nothing")
     }
 
+    /// The review's follow-up: drafts in the legacy file must not vanish — the
+    /// shared tier refuses them and `orderDrafts` is skeletal, so the file stays
+    /// put as the recovery path until draft migration exists.
+    @Test("A file holding drafts stays put — bytes remain the recovery path")
+    func draftHoldingFileIsNotArchived() throws {
+        let encoder = JSONEncoder()
+        let json = try encoder.encode([
+            Order(created: .now, status: .done,
+                  route: [RoutePoint(latitude: 55, longitude: 37, address: "Старый")]),
+            Order(created: .now, status: .draft,
+                  route: [RoutePoint(latitude: 55, longitude: 37, address: "Черновик")]),
+        ])
+        try write(json, named: "orders.json")
+        let database = makeDatabase()
+
+        let stored = try database.readOrders()
+        #expect(stored.count == 1, "the placed order migrates")
+        #expect(stored.first?.status == .done)
+        #expect(FileManager.default.fileExists(
+            atPath: directory.appendingPathComponent("orders.json").path),
+                "a partial import keeps the file — the draft's bytes are not orphaned")
+    }
+
     @Test("A corrupt orders.json is rescued, not destroyed and not blocking")
     func corruptSourceIsRescued() throws {
         try write(Data("not json".utf8), named: "orders.json")
