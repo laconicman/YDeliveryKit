@@ -671,4 +671,164 @@ struct PersistenceTests {
         #expect(stored.name == "Накладная")
         #expect(stored.value == "77")
     }
+
+    // MARK: Provider events — the owner-written feed
+
+    @Test("An event records once — its replay is news to nobody")
+    func providerEventDeduplicates() throws {
+        let database = makeDatabase()
+        let order = Order(
+            created: .now, status: .active,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")],
+            claimID: "claim-e")
+        try database.recordOrder(order)
+        let event = ProviderEvent(
+            orderID: order.id, providerEventID: 7, at: .now,
+            kind: "status", providerStatus: "performer_found", source: "journal")
+
+        #expect(try database.recordProviderEvent(event))
+        #expect(try !database.recordProviderEvent(event),
+                "a replayed feed id merges by key — the notification layer reads false as silence")
+        #expect(try database.providerEvents(orderID: order.id).count == 1)
+    }
+
+    @Test("A status event writes the mirror — but an older event can't rewind it")
+    func providerEventUpdatesMirror() throws {
+        let database = makeDatabase()
+        let order = Order(
+            created: .now, status: .active,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")],
+            claimID: "claim-m")
+        try database.recordOrder(order)
+
+        try database.recordProviderEvent(ProviderEvent(
+            orderID: order.id, providerEventID: 3,
+            at: Date(timeIntervalSince1970: 1000),
+            kind: "status", providerStatus: "delivery_arrived", source: "journal"))
+        // A late-arriving journal entry with an older stamp is *new* to the
+        // timeline — dedupe is per-key — but the mirror only moves forward: the
+        // order was already sighted at 1000, so 900 must not regress it
+        // (review, PR #6).
+        try database.recordProviderEvent(ProviderEvent(
+            orderID: order.id, providerEventID: 2,
+            at: Date(timeIntervalSince1970: 900),
+            kind: "status", providerStatus: "pickuped", source: "journal"))
+        #expect(try database.providerEvents(orderID: order.id).map(\.providerStatus)
+                == ["pickuped", "delivery_arrived"],
+                "events read oldest-first by stamp, not by arrival")
+
+        let mirror: Row? = try database.queue.read { db in
+            try Row.fetchOne(db, sql: """
+                SELECT "providerStatus", "providerObservedAt"
+                FROM "orderProviderStates" WHERE "orderID" = ?
+                """, arguments: AppDatabase.args([order.id]))
+        }
+        let status: String? = mirror?["providerStatus"]
+        let observedAt: Double? = mirror?["providerObservedAt"]
+        #expect(status == "delivery_arrived",
+                "the newer observation owns the mirror, not the last-arriving event")
+        #expect(observedAt == 1000)
+    }
+
+    /// A sighting has no feed id — the same status seen again derives the same
+    /// row and dedupes out of the timeline. But the mirror must still move: the
+    /// repeat *is* fresh information ("still this status, as of now") and its
+    /// detail may have changed (review, PR #6).
+    @Test("A repeated sighting refreshes the mirror without a second timeline row")
+    func repeatedSightingRefreshesMirror() throws {
+        let database = makeDatabase()
+        let order = Order(
+            created: .now, status: .active,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")],
+            claimID: "claim-s")
+        try database.recordOrder(order)
+
+        try database.recordProviderEvent(ProviderEvent(
+            orderID: order.id, at: Date(timeIntervalSince1970: 1000),
+            kind: "status", providerStatus: "delivery_arrived",
+            detail: "courier waiting", source: "card"))
+        #expect(try !database.recordProviderEvent(ProviderEvent(
+            orderID: order.id, at: Date(timeIntervalSince1970: 1300),
+            kind: "status", providerStatus: "delivery_arrived",
+            detail: "courier called", source: "card")),
+                "same status from the same source is the same sighting — no second row")
+        #expect(try database.providerEvents(orderID: order.id).count == 1)
+
+        let mirror: Row? = try database.queue.read { db in
+            try Row.fetchOne(db, sql: """
+                SELECT "providerDetail", "providerObservedAt"
+                FROM "orderProviderStates" WHERE "orderID" = ?
+                """, arguments: AppDatabase.args([order.id]))
+        }
+        let detail: String? = mirror?["providerDetail"]
+        let observedAt: Double? = mirror?["providerObservedAt"]
+        #expect(detail == "courier called")
+        #expect(observedAt == 1300)
+    }
+
+    /// A non-status event carries its own detail — «850 RUB» is about the price,
+    /// not about the status. Writing it beside the stored status would pair the
+    /// old observation with an unrelated payload (review, PR #6).
+    @Test("A detail without a status never poses as the status's own")
+    func nonStatusEventLeavesTheMirrorAlone() throws {
+        let database = makeDatabase()
+        let order = Order(
+            created: .now, status: .active,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")],
+            claimID: "claim-p")
+        try database.recordOrder(order)
+
+        try database.recordProviderEvent(ProviderEvent(
+            orderID: order.id, providerEventID: 1,
+            at: Date(timeIntervalSince1970: 1000),
+            kind: "status", providerStatus: "pickuped",
+            detail: "courier collected parcel", source: "journal"))
+        try database.recordProviderEvent(ProviderEvent(
+            orderID: order.id, providerEventID: 2,
+            at: Date(timeIntervalSince1970: 1100),
+            kind: "price", detail: "850 RUB", source: "journal"))
+
+        let mirror: Row? = try database.queue.read { db in
+            try Row.fetchOne(db, sql: """
+                SELECT "providerStatus", "providerDetail"
+                FROM "orderProviderStates" WHERE "orderID" = ?
+                """, arguments: AppDatabase.args([order.id]))
+        }
+        let status: String? = mirror?["providerStatus"]
+        let detail: String? = mirror?["providerDetail"]
+        #expect(status == "pickuped")
+        #expect(detail == "courier collected parcel",
+                "the price event's detail is not the status's detail")
+        // …while the timeline keeps it — the feed lost nothing.
+        #expect(try database.providerEvents(orderID: order.id).map(\.kind)
+                == ["status", "price"])
+    }
+
+    @Test("An event bumps the order's activity without ever rewinding it")
+    func providerEventMovesActivityForwardOnly() throws {
+        let database = makeDatabase()
+        let order = Order(
+            created: .now, status: .active,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")],
+            claimID: "claim-a")
+        try database.recordOrder(order)
+        // record() itself stamps "now" — the events must sit either side of it.
+        let later = Date.now.addingTimeInterval(60)
+        let earlier = Date.now.addingTimeInterval(-3600)
+
+        try database.recordProviderEvent(ProviderEvent(
+            orderID: order.id, providerEventID: 1,
+            at: later, kind: "status", source: "journal"))
+        try database.recordProviderEvent(ProviderEvent(
+            orderID: order.id, providerEventID: 2,
+            at: earlier, kind: "status", source: "journal"))
+
+        let activity: Double = try database.queue.read { db in
+            try Row.fetchOne(db, sql: """
+                SELECT "lastActivityAt" FROM "orders" WHERE "id" = ?
+                """, arguments: AppDatabase.args([order.id]))?["lastActivityAt"] ?? 0
+        }
+        #expect(activity == later.timeIntervalSince1970,
+                "the older event is history, not the newest activity")
+    }
 }
