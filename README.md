@@ -13,13 +13,14 @@ needs, which cannot import the app.*
   `RouteLine`,
   the `Layout` tokens.
 - **App models:** `Order`, `OrderStatus`, `RoutePoint`, `SavedPlace`, `AddressParts`.
-- **Local stores:** `OrderStore`, `SavedPlaceStore` — one JSON substrate for history,
-  recents, saved places and repeat-order. Both take the App Group **by parameter**
-  (`inAppGroup(id:)`): the group is the consuming app's to name, this package serves
-  any of them.
+- **Persistence substrate:** `AppDatabase` — one `ydelivery.sqlite` in the App Group
+  (SQLiteData + GRDB), the contract's three sync tiers, legacy-JSON migration, and the
+  lazy `SyncEngine` an extension target shares with the app. Both identifiers are the
+  consuming app's to name (`inAppGroup(id:providerAccountRef:containerIdentifier:)`):
+  the group, the provider account, and the CloudKit container belong to the host.
 
 Swift 6, iOS 17 floor, `MainActor` default isolation with `nonisolated` value types.
-Swift Testing throughout. Depends on SFSafeSymbols only.
+Swift Testing throughout. Depends on SFSafeSymbols, SQLiteData, and GRDB.
 
 Versioning: semantic, tags consumed by URL. Source-breaking changes bump the minor
 while `0.x`, per the house rule in the consuming apps.
@@ -28,8 +29,6 @@ Why the components are shaped this way — the pin taxonomy, the semantic-color 
 the motion table — is recorded in the consuming app's DocC catalogue
 (`YDelivery/Documentation.docc/`), deliberately not re-derived here.
 
-One consumer-facing honesty note: a malformed store file reads as empty, and its bytes
-are rescued aside as `*.corrupted-<t>-<id>.json` on the next write. There is no API yet
-for discovering those sidecars — a consumer that wants to surface corruption should
-look for them beside the store files; an API earns its way in with the first consumer
-that needs one.
+One consumer-facing honesty note: the substrate never destroys bytes. A malformed
+legacy file is rescued aside as `*.corrupted-<t>-<id>.json` before the store opens;
+a failed open is a stored error to render, never a crash and never silent-empty.
