@@ -44,12 +44,16 @@ extension AppDatabase {
     /// button; this is the seam for anything else (tests, future surfaces).
     ///
     /// `SyncMetadata.share` is the engine's cache of "which share this record
-    /// rides," cleared only by `SyncEngine.deleteShare` on *fetched* deletions —
-    /// our own sent deletion never travels that path, so without the write below
-    /// `orderIsShared` would report a ghost share forever (`SyncEngine.unshare`
-    /// writes no bookkeeping; `deleteShare` has the shape this mirrors). A later
-    /// `shareOrder` re-verifies against the cloud anyway, so clearing the column
-    /// can only make the cache more truthful.
+    /// rides." `SyncEngine.unshare` writes no bookkeeping: it deletes the share
+    /// through `modifyRecords` directly, so the zone's change token is not
+    /// advanced past the deletion and the *next fetched zone-changes pass*
+    /// echoes it back — `SyncEngine.deleteShare` clears the cache then (the
+    /// write this mirrors). Clearing eagerly is the same write a fetch cycle
+    /// would land moments later, done now because `orderIsShared` answers the
+    /// affordance's label and a ghost "manage" button is not worth a sync
+    /// round-trip. A later `shareOrder` re-verifies against the cloud anyway
+    /// (`.unknownItem` reads as no share), so the column can only be more
+    /// truthful.
     public func unshareOrder(id: Order.ID) async throws {
         try await syncEngine.unshare(record: OrderRow(id: id, provider: provider))
         try await queue.write { db in
