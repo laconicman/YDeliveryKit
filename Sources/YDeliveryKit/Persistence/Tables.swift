@@ -277,24 +277,73 @@ nonisolated struct PendingAcceptanceRow: Identifiable {
 /// Provisional parked draft — an un-placed order has no provider existence, so it is
 /// not an `orders` row. Named `OrderDraft`, not `Draft`: `@Table` synthesizes a
 /// `.Draft` nested type on every model and a literal `Draft` collides inside the
-/// macro (spike-verified).
+/// macro (spike-verified). The option columns mirror `orderOptions` 1:1, plus the
+/// remembered class — everything the sender's draft row needs to resurrect itself.
 @Table("orderDrafts")
 nonisolated struct OrderDraftRow: Identifiable {
     let id: UUID
     var createdAt: Date = .init(timeIntervalSince1970: 0)
+    var proCourier = false
+    var toDoor = true
+    var thermobag = false
+    var loaders = 0
+    var due: Date?
+    var comment = ""
+    var chosenTariff: String?
 }
 
+/// One route stop per row, in travel order. The point columns are nullable where
+/// the draft differs from an order: a stop the sender added but has not filled
+/// persists as position + role + NULLs — the hole is part of the draft. Contact
+/// columns ride the same row, as on `routeStops`.
 @Table("draftStops")
 nonisolated struct DraftStopRow: Identifiable {
     let id: UUID
     var draftID: OrderDraftRow.ID
     var position = 0
     var role = ""
+    var latitude: Double?
+    var longitude: Double?
+    var address: String?
+    var entrance: String?
+    var floor: String?
+    var apartment: String?
+    var intercom: String?
+    var contactName: String?
+    var contactGivenName: String?
+    var contactFamilyName: String?
+    var contactPhone: String?
+    var contactPhoneExtension: String?
 }
 
+/// A parcel row — mirrors `orderItems` minus `orderID`; the journey ends are *Ref*
+/// values → `DraftStopRow.id`, nil reading as the route's ends.
 @Table("draftItems")
 nonisolated struct DraftItemRow: Identifiable {
     let id: UUID
     var draftID: OrderDraftRow.ID
     var name = ""
+    var quantity = 1
+    var weightKg: Double?
+    var cost: String?
+    /// No default — the writer names its currency; a package constant would bind
+    /// the table to one market.
+    var currency: String
+    var sizeLengthCm: Double?
+    var sizeWidthCm: Double?
+    var sizeHeightCm: Double?
+    var pickupStopRef: UUID?
+    var dropoffStopRef: UUID?
+}
+
+/// A «Ваши поля» value on the draft — `value` NULL marks a field the sender
+/// disclosed but left unanswered, which restores as revealed rather than hidden.
+/// No `name`/`carrier` snapshots: the definitions table sits in the same device
+/// tier, so nothing needs to outlive a join that always works.
+@Table("draftCustomFields")
+nonisolated struct DraftCustomFieldRow: Identifiable {
+    let id: UUID
+    var draftID: OrderDraftRow.ID
+    var fieldRef = UUID()
+    var value: String?
 }

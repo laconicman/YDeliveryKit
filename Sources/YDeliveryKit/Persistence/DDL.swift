@@ -132,19 +132,35 @@ nonisolated extension AppDatabase {
         ) STRICT;
         CREATE TABLE IF NOT EXISTS "\(OrderDraftRow.tableName)" (
           "id" TEXT PRIMARY KEY NOT NULL ON CONFLICT REPLACE DEFAULT (uuid()),
-          "createdAt" REAL NOT NULL
+          "createdAt" REAL NOT NULL,
+          "proCourier" INTEGER NOT NULL, "toDoor" INTEGER NOT NULL,
+          "thermobag" INTEGER NOT NULL, "loaders" INTEGER NOT NULL,
+          "due" REAL, "comment" TEXT NOT NULL, "chosenTariff" TEXT
         ) STRICT;
         CREATE TABLE IF NOT EXISTS "\(DraftStopRow.tableName)" (
           "id" TEXT PRIMARY KEY NOT NULL ON CONFLICT REPLACE DEFAULT (uuid()),
           "draftID" TEXT NOT NULL
             REFERENCES "\(OrderDraftRow.tableName)"("id") ON DELETE CASCADE,
-          "position" INTEGER NOT NULL, "role" TEXT NOT NULL
+          "position" INTEGER NOT NULL, "role" TEXT NOT NULL,
+          "latitude" REAL, "longitude" REAL, "address" TEXT,
+          "entrance" TEXT, "floor" TEXT, "apartment" TEXT, "intercom" TEXT,
+          "contactName" TEXT, "contactGivenName" TEXT, "contactFamilyName" TEXT,
+          "contactPhone" TEXT, "contactPhoneExtension" TEXT
         ) STRICT;
         CREATE TABLE IF NOT EXISTS "\(DraftItemRow.tableName)" (
           "id" TEXT PRIMARY KEY NOT NULL ON CONFLICT REPLACE DEFAULT (uuid()),
           "draftID" TEXT NOT NULL
             REFERENCES "\(OrderDraftRow.tableName)"("id") ON DELETE CASCADE,
-          "name" TEXT NOT NULL
+          "name" TEXT NOT NULL, "quantity" INTEGER NOT NULL,
+          "weightKg" REAL, "cost" TEXT, "currency" TEXT NOT NULL,
+          "sizeLengthCm" REAL, "sizeWidthCm" REAL, "sizeHeightCm" REAL,
+          "pickupStopRef" TEXT, "dropoffStopRef" TEXT
+        ) STRICT;
+        CREATE TABLE IF NOT EXISTS "\(DraftCustomFieldRow.tableName)" (
+          "id" TEXT PRIMARY KEY NOT NULL ON CONFLICT REPLACE DEFAULT (uuid()),
+          "draftID" TEXT NOT NULL
+            REFERENCES "\(OrderDraftRow.tableName)"("id") ON DELETE CASCADE,
+          "fieldRef" TEXT NOT NULL, "value" TEXT
         ) STRICT;
         """
 
@@ -168,5 +184,36 @@ nonisolated extension AppDatabase {
         (RouteStopRow.tableName, "visitedAt", "REAL", nil),
         (RouteStopRow.tableName, "expectedVisitAt", "REAL", nil),
         (PendingAcceptanceRow.tableName, "attempt", "INTEGER NOT NULL DEFAULT 1", nil),
+        // YD-16 — the draft tier grows real columns. NOT NULL additions carry
+        // `DEFAULT` only to satisfy ALTER's grammar; the tables were skeletal and
+        // never written, so no row can ever read the defaults.
+        (OrderDraftRow.tableName, "proCourier", "INTEGER NOT NULL DEFAULT 0", nil),
+        (OrderDraftRow.tableName, "toDoor", "INTEGER NOT NULL DEFAULT 1", nil),
+        (OrderDraftRow.tableName, "thermobag", "INTEGER NOT NULL DEFAULT 0", nil),
+        (OrderDraftRow.tableName, "loaders", "INTEGER NOT NULL DEFAULT 0", nil),
+        (OrderDraftRow.tableName, "due", "REAL", nil),
+        (OrderDraftRow.tableName, "comment", "TEXT NOT NULL DEFAULT ''", nil),
+        (OrderDraftRow.tableName, "chosenTariff", "TEXT", nil),
+        (DraftStopRow.tableName, "latitude", "REAL", nil),
+        (DraftStopRow.tableName, "longitude", "REAL", nil),
+        (DraftStopRow.tableName, "address", "TEXT", nil),
+        (DraftStopRow.tableName, "entrance", "TEXT", nil),
+        (DraftStopRow.tableName, "floor", "TEXT", nil),
+        (DraftStopRow.tableName, "apartment", "TEXT", nil),
+        (DraftStopRow.tableName, "intercom", "TEXT", nil),
+        (DraftStopRow.tableName, "contactName", "TEXT", nil),
+        (DraftStopRow.tableName, "contactGivenName", "TEXT", nil),
+        (DraftStopRow.tableName, "contactFamilyName", "TEXT", nil),
+        (DraftStopRow.tableName, "contactPhone", "TEXT", nil),
+        (DraftStopRow.tableName, "contactPhoneExtension", "TEXT", nil),
+        (DraftItemRow.tableName, "quantity", "INTEGER NOT NULL DEFAULT 1", nil),
+        (DraftItemRow.tableName, "weightKg", "REAL", nil),
+        (DraftItemRow.tableName, "cost", "TEXT", nil),
+        (DraftItemRow.tableName, "currency", "TEXT NOT NULL DEFAULT ''", nil),
+        (DraftItemRow.tableName, "sizeLengthCm", "REAL", nil),
+        (DraftItemRow.tableName, "sizeWidthCm", "REAL", nil),
+        (DraftItemRow.tableName, "sizeHeightCm", "REAL", nil),
+        (DraftItemRow.tableName, "pickupStopRef", "TEXT", nil),
+        (DraftItemRow.tableName, "dropoffStopRef", "TEXT", nil),
     ]
 }

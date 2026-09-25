@@ -227,6 +227,18 @@ public nonisolated final class AppDatabase: Sendable {
         }
     }
 
+    /// A read that found bytes it cannot honour — used where the alternative is
+    /// the `Row` subscript's `try!` trap on a launch-path read (the draft tier).
+    public enum ReadError: LocalizedError {
+        case corruptDraftColumn(String)
+        public var errorDescription: String? {
+            switch self {
+            case .corruptDraftColumn(let name):
+                "a stored draft column cannot be decoded — \(name)"
+            }
+        }
+    }
+
     /// A write the store refuses rather than files wrongly.
     public enum WriteError: LocalizedError {
         /// `orders` is the shared tier — a parked draft has no provider existence
@@ -1079,5 +1091,239 @@ public nonisolated final class AppDatabase: Sendable {
                     providerAccountRef, pending.claimID, pending.attempt,
                 ]))
         }
+    }
+
+    // MARK: - Drafts
+
+    /// The parked draft, written whole — one row, children replaced per save.
+    /// At most one `orderDrafts` row ever exists: the flow owns a single draft,
+    /// so the write also clears strays a crash or bug could have left — the
+    /// singleton is enforced here, not assumed from the caller's discipline.
+    public func saveDraft(_ draft: OrderDraft) throws {
+        try queue.write { db in
+            // `PRAGMA foreign_keys` is off (GRDB's default), so CASCADE never
+            // fires — children die explicitly, as `recordOrder`'s stops do.
+            for table in [DraftStopRow.tableName, DraftItemRow.tableName,
+                          DraftCustomFieldRow.tableName] {
+                try db.execute(
+                    sql: "DELETE FROM \"" + table + "\" WHERE \"draftID\" != ?",
+                    arguments: Self.args([draft.id]))
+            }
+            try db.execute(sql: """
+                DELETE FROM "orderDrafts" WHERE "id" != ?
+                """, arguments: Self.args([draft.id]))
+            try db.execute(sql: """
+                INSERT INTO "orderDrafts"
+                  ("id", "createdAt", "proCourier", "toDoor", "thermobag",
+                   "loaders", "due", "comment", "chosenTariff")
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT("id") DO UPDATE SET
+                  "proCourier" = excluded."proCourier",
+                  "toDoor" = excluded."toDoor",
+                  "thermobag" = excluded."thermobag",
+                  "loaders" = excluded."loaders",
+                  "due" = excluded."due",
+                  "comment" = excluded."comment",
+                  "chosenTariff" = excluded."chosenTariff"
+                """, arguments: Self.args([
+                    draft.id, draft.createdAt.timeIntervalSince1970,
+                    draft.proCourier, draft.toDoor, draft.thermobag,
+                    draft.loaders, draft.due?.timeIntervalSince1970,
+                    draft.comment, draft.chosenTariff,
+                ]))
+            // Children rewrite wholesale: the draft is a document, not a delta —
+            // a stop removed mid-edit must not outlive its row.
+            for table in [DraftStopRow.tableName, DraftItemRow.tableName,
+                          DraftCustomFieldRow.tableName] {
+                try db.execute(
+                    sql: "DELETE FROM \"" + table + "\" WHERE \"draftID\" = ?",
+                    arguments: Self.args([draft.id]))
+            }
+            for (position, stop) in draft.stops.enumerated() {
+                let point = stop.point
+                try db.execute(sql: """
+                    INSERT INTO "draftStops"
+                      ("id", "draftID", "position", "role",
+                       "latitude", "longitude", "address",
+                       "entrance", "floor", "apartment", "intercom",
+                       "contactName", "contactGivenName", "contactFamilyName",
+                       "contactPhone", "contactPhoneExtension")
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, arguments: Self.args([
+                        stop.id, draft.id, position, stop.role,
+                        point?.latitude, point?.longitude, point?.address,
+                        point?.addressParts?.entrance, point?.addressParts?.floor,
+                        point?.addressParts?.apartment, point?.addressParts?.intercom,
+                        point?.contactName, point?.contactGivenName,
+                        point?.contactFamilyName, point?.contactPhone,
+                        point?.contactPhoneExtension,
+                    ]))
+            }
+            for item in draft.items {
+                try db.execute(sql: """
+                    INSERT INTO "draftItems"
+                      ("id", "draftID", "name", "quantity", "weightKg", "cost",
+                       "currency", "sizeLengthCm", "sizeWidthCm", "sizeHeightCm",
+                       "pickupStopRef", "dropoffStopRef")
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, arguments: Self.args([
+                        item.id, draft.id, item.name, item.quantity,
+                        item.weightKg, item.cost, item.currency,
+                        item.sizeLengthCm, item.sizeWidthCm, item.sizeHeightCm,
+                        item.pickupStopRef, item.dropoffStopRef,
+                    ]))
+            }
+            // An answered field and a merely-disclosed one share the row — NULL
+            // `value` marks the latter (the draft remembers the disclosure, not
+            // just the typing).
+            for (fieldRef, value) in draft.fieldValues {
+                try db.execute(sql: """
+                    INSERT INTO "draftCustomFields" ("id", "draftID", "fieldRef", "value")
+                    VALUES (?, ?, ?, ?)
+                    """, arguments: Self.args([
+                        UUID.derived(namespace: UUID.DerivedNamespace.draftCustomField,
+                                     draft.id.uuidString, fieldRef.uuidString),
+                        draft.id, fieldRef, value,
+                    ]))
+            }
+            for fieldRef in draft.revealedFieldRefs where draft.fieldValues[fieldRef] == nil {
+                try db.execute(sql: """
+                    INSERT INTO "draftCustomFields" ("id", "draftID", "fieldRef", "value")
+                    VALUES (?, ?, ?, NULL)
+                    """, arguments: Self.args([
+                        UUID.derived(namespace: UUID.DerivedNamespace.draftCustomField,
+                                     draft.id.uuidString, fieldRef.uuidString),
+                        draft.id, fieldRef,
+                    ]))
+            }
+        }
+    }
+
+    /// The parked draft, if one exists. Throws rather than posing as empty: an
+    /// unreadable draft must not masquerade as none, or the caller's next save
+    /// could collapse bytes it never got to read (the load-bearing difference
+    /// from `pendingAcceptances`, where a skipped pass only delays a retry).
+    /// Reads go through ``column(_:in:as:)`` rather than the subscript — a draft
+    /// is read on every launch, so a corrupt row must throw, not trap the app.
+    public func currentDraft() throws -> OrderDraft? {
+        try queue.read { db in
+            guard let row = try Row.fetchOne(db, sql: """
+                SELECT * FROM "orderDrafts" ORDER BY "createdAt" DESC LIMIT 1
+                """) else { return nil }
+            let draftID: UUID = try Self.column("id", in: row)
+            let createdAt: Double = try Self.column("createdAt", in: row)
+            var draft = OrderDraft(id: draftID,
+                                   createdAt: Date(timeIntervalSince1970: createdAt))
+            draft.proCourier = try Self.column("proCourier", in: row)
+            draft.toDoor = try Self.column("toDoor", in: row)
+            draft.thermobag = try Self.column("thermobag", in: row)
+            draft.loaders = try Self.column("loaders", in: row)
+            draft.due = try Self.columnIfPresent("due", in: row)
+                .map { Date(timeIntervalSince1970: $0) }
+            draft.comment = try Self.column("comment", in: row)
+            draft.chosenTariff = try Self.columnIfPresent("chosenTariff", in: row)
+            draft.stops = try Row.fetchAll(db, sql: """
+                SELECT * FROM "draftStops" WHERE "draftID" = ? ORDER BY "position"
+                """, arguments: Self.args([draftID])).map { row in
+                try OrderDraft.Stop(
+                    id: Self.column("id", in: row),
+                    role: Self.column("role", in: row),
+                    point: Self.draftPoint(row))
+            }
+            draft.items = try Row.fetchAll(db, sql: """
+                SELECT * FROM "draftItems" WHERE "draftID" = ? ORDER BY "rowid"
+                """, arguments: Self.args([draftID])).map { row in
+                try OrderDraft.Item(
+                    id: Self.column("id", in: row),
+                    name: Self.column("name", in: row),
+                    quantity: Self.column("quantity", in: row),
+                    weightKg: Self.columnIfPresent("weightKg", in: row),
+                    cost: Self.columnIfPresent("cost", in: row),
+                    currency: Self.column("currency", in: row),
+                    sizeLengthCm: Self.columnIfPresent("sizeLengthCm", in: row),
+                    sizeWidthCm: Self.columnIfPresent("sizeWidthCm", in: row),
+                    sizeHeightCm: Self.columnIfPresent("sizeHeightCm", in: row),
+                    pickupStopRef: Self.columnIfPresent("pickupStopRef", in: row),
+                    dropoffStopRef: Self.columnIfPresent("dropoffStopRef", in: row))
+            }
+            for row in try Row.fetchAll(db, sql: """
+                SELECT "fieldRef", "value" FROM "draftCustomFields"
+                WHERE "draftID" = ?
+                """, arguments: Self.args([draftID])) {
+                let fieldRef: UUID = try Self.column("fieldRef", in: row)
+                draft.revealedFieldRefs.insert(fieldRef)
+                if let value: String = try Self.columnIfPresent("value", in: row) {
+                    draft.fieldValues[fieldRef] = value
+                }
+            }
+            return draft
+        }
+    }
+
+    /// The draft is consumed — placed, or its claim's fate handed to the
+    /// pending-acceptance drain. One row ever exists, so the delete names no id:
+    /// whatever row is parked is the current draft's. Children die explicitly —
+    /// `PRAGMA foreign_keys` is off (GRDB's default), so CASCADE never fires.
+    public func deleteDrafts() throws {
+        try queue.write { db in
+            for table in [DraftStopRow.tableName, DraftItemRow.tableName,
+                          DraftCustomFieldRow.tableName] {
+                try db.execute(sql: "DELETE FROM \"" + table + "\"")
+            }
+            try db.execute(sql: "DELETE FROM \"orderDrafts\"")
+        }
+    }
+
+    /// A `draftStops` row's point: same column names as the shared tier, but
+    /// nullable — an unfilled stop is position + role + NULLs. A row with
+    /// partial coordinates is corrupt and reads as unfilled rather than
+    /// trusting half an address.
+    private static func draftPoint(_ row: Row) throws -> RoutePoint? {
+        guard let latitude: Double = try columnIfPresent("latitude", in: row),
+              let longitude: Double = try columnIfPresent("longitude", in: row),
+              let address: String = try columnIfPresent("address", in: row)
+        else { return nil }
+        let entrance: String? = try columnIfPresent("entrance", in: row)
+        let floor: String? = try columnIfPresent("floor", in: row)
+        let apartment: String? = try columnIfPresent("apartment", in: row)
+        let intercom: String? = try columnIfPresent("intercom", in: row)
+        let parts: AddressParts? = [entrance, floor, apartment, intercom].allSatisfy({ $0 == nil })
+            ? nil
+            : AddressParts(
+                entrance: entrance ?? "", floor: floor ?? "",
+                apartment: apartment ?? "", intercom: intercom ?? "")
+        return RoutePoint(
+            latitude: latitude, longitude: longitude,
+            address: address, addressParts: parts,
+            contactName: try columnIfPresent("contactName", in: row),
+            contactGivenName: try columnIfPresent("contactGivenName", in: row),
+            contactFamilyName: try columnIfPresent("contactFamilyName", in: row),
+            contactPhone: try columnIfPresent("contactPhone", in: row),
+            contactPhoneExtension: try columnIfPresent("contactPhoneExtension", in: row))
+    }
+
+    /// `row["x"]` is `try!` inside — fine for the shared tier's reads, but the
+    /// draft is read on every launch, where a corrupt row would trap the app at
+    /// every start. These read through `DatabaseValue` so failure surfaces as an
+    /// error the caller can log and step around; the next save collapses the row.
+    private static func column<T: DatabaseValueConvertible>(
+        _ name: String, in row: Row, as type: T.Type = T.self
+    ) throws -> T {
+        let value: DatabaseValue = row[name]
+        guard let decoded = T.fromDatabaseValue(value) else {
+            throw ReadError.corruptDraftColumn(name)
+        }
+        return decoded
+    }
+
+    private static func columnIfPresent<T: DatabaseValueConvertible>(
+        _ name: String, in row: Row, as type: T.Type = T.self
+    ) throws -> T? {
+        let value: DatabaseValue = row[name]
+        if value.isNull { return nil }
+        guard let decoded = T.fromDatabaseValue(value) else {
+            throw ReadError.corruptDraftColumn(name)
+        }
+        return decoded
     }
 }
