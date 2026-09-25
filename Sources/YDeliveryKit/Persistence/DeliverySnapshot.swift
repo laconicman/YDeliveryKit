@@ -113,7 +113,10 @@ public nonisolated enum DeliverySnapshotStore {
 
     /// The extension's read. `nil` covers every unreadable case — no group,
     /// no file, torn write, a shape this reader's version predates — because
-    /// the surfaces render *empty*, never crash.
+    /// the surfaces render *empty*, never crash. A *newer* version reads as
+    /// empty too: additive fields decode harmlessly, but a bumped version is
+    /// the writer saying a meaning changed, and a guessed value is worse than
+    /// none (review, Kit PR #9).
     public static func read(inAppGroup id: String,
                             fileManager: FileManager = .default) -> DeliverySnapshot? {
         guard let url = url(inAppGroup: id, fileManager: fileManager),
@@ -121,14 +124,18 @@ public nonisolated enum DeliverySnapshotStore {
         else { return nil }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return try? decoder.decode(DeliverySnapshot.self, from: data)
+        guard let snapshot = try? decoder.decode(DeliverySnapshot.self, from: data),
+              snapshot.snapshotVersion <= DeliverySnapshot.currentVersion
+        else { return nil }
+        return snapshot
     }
 
-    /// The app's render. `.completeUntilFirstUserAuthentication` is the whole
-    /// point of the file: an accessory widget renders on a locked device, and
-    /// the default-for-the-app protection class may be stricter than that
-    /// allows. Throws — a failed write leaves the last good snapshot in
-    /// place, and the caller logs rather than strands a timeline.
+    /// The app's render. `.completeUntilFirstUserAuthentication` rides the
+    /// write itself — a separate `setAttributes` would leave a window where a
+    /// failed second step strands a *stricter*-protected replacement behind
+    /// the lock screen (review, Kit PR #9). Throws — a failed write leaves the
+    /// last good snapshot in place, and the caller logs rather than strands a
+    /// timeline.
     public static func write(_ snapshot: DeliverySnapshot, inAppGroup id: String,
                              fileManager: FileManager = .default) throws {
         guard let url = url(inAppGroup: id, fileManager: fileManager) else {
@@ -137,10 +144,9 @@ public nonisolated enum DeliverySnapshotStore {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         let data = try encoder.encode(snapshot)
-        try data.write(to: url, options: .atomic)
-        try fileManager.setAttributes(
-            [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
-            ofItemAtPath: url.path)
+        try data.write(to: url, options: [
+            .atomic, .completeFileProtectionUntilFirstUserAuthentication,
+        ])
     }
 
     private static func url(inAppGroup id: String,

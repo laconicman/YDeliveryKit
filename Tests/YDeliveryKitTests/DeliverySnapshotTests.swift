@@ -78,6 +78,19 @@ struct DeliverySnapshotTests {
                 "an unresolvable group is empty too")
     }
 
+    @Test("A newer-version snapshot reads as empty — a meaning may have moved")
+    func newerVersionReadsEmpty() throws {
+        let stub = try makeStub()
+        let snapshot = DeliverySnapshot(
+            renderedAt: .now, orders: [],
+            snapshotVersion: DeliverySnapshot.currentVersion + 1)
+        try DeliverySnapshotStore.write(snapshot, inAppGroup: "group.test",
+                                        fileManager: stub)
+        #expect(DeliverySnapshotStore.read(inAppGroup: "group.test",
+                                           fileManager: stub) == nil,
+                "the writer bumped the version to say a meaning changed — guessing is worse")
+    }
+
     @Test("A write leaves a complete file where the group expects it")
     func writeLandsAtomically() throws {
         let stub = try makeStub()
