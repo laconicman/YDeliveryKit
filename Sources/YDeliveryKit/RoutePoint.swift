@@ -129,8 +129,8 @@ nonisolated extension RoutePoint {
         let name = formatted.isEmpty ? (contactName ?? "") : formatted
         let phone = if let contactPhoneExtension, !contactPhoneExtension.isEmpty,
                        let contactPhone, !contactPhone.isEmpty {
-            String(localized: "\(contactPhone), ext. \(contactPhoneExtension)",
-                   bundle: .kit)
+            String(localized: LocalizedStringResource(
+                "\(contactPhone), ext. \(contactPhoneExtension)", bundle: .kit))
         } else {
             contactPhone ?? ""
         }
