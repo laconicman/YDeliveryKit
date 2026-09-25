@@ -43,6 +43,12 @@ public nonisolated struct Order: Codable, Hashable, Identifiable, Sendable {
     /// computed at render so a stale estimate never poses as fresh.
     public var etaMinutes: Int?
 
+    /// The wire's own status word (`"performer_found"`, `"delivery_arrived"`) —
+    /// mirrored raw so surfaces can speak the phase `status` collapses: «едет
+    /// к получателю» and «у двери» are both `.active`. A string, not the
+    /// generated type — the wire vocabulary stays a spelling here.
+    public var providerStatus: String?
+
     /// When the provider last reported this state — the "as of" stamp shared
     /// surfaces render (Collaboration → staleness) and the ETA's basis.
     public var providerObservedAt: Date?
@@ -66,6 +72,7 @@ public nonisolated struct Order: Codable, Hashable, Identifiable, Sendable {
         courierName: String? = nil,
         courierVehicle: String? = nil,
         etaMinutes: Int? = nil,
+        providerStatus: String? = nil,
         providerObservedAt: Date? = nil
     ) {
         self.id = id
@@ -79,6 +86,7 @@ public nonisolated struct Order: Codable, Hashable, Identifiable, Sendable {
         self.courierName = courierName
         self.courierVehicle = courierVehicle
         self.etaMinutes = etaMinutes
+        self.providerStatus = providerStatus
         self.providerObservedAt = providerObservedAt
     }
 }

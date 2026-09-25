@@ -34,6 +34,12 @@ public nonisolated struct DeliveryActivityAttributes: ActivityAttributes {
         /// The courier's first name once the vendor reports one — nil until
         /// `performer_found` and again if the performer info never arrives.
         public var courierName: String?
+        /// The courier's vehicle as the vendor spelled it — «м 234 ор 77».
+        public var courierVehicle: String?
+        /// The wire's own status word — the surface's phase vocabulary:
+        /// «едет к получателю» and «у двери» collapse to the same `.active`
+        /// in `status`, and the Lock Screen's headline is the difference.
+        public var providerStatus: String?
         /// The arrival moment (`Order.etaAt`), recomputed by the updater from
         /// the vendor's `eta` minutes *as observed at* `providerObservedAt` —
         /// absolute so the system can render it without polling us.
@@ -48,6 +54,8 @@ public nonisolated struct DeliveryActivityAttributes: ActivityAttributes {
             orderNumber: String? = nil,
             destinationAddress: String,
             courierName: String? = nil,
+            courierVehicle: String? = nil,
+            providerStatus: String? = nil,
             etaAt: Date? = nil,
             providerObservedAt: Date? = nil
         ) {
@@ -55,6 +63,8 @@ public nonisolated struct DeliveryActivityAttributes: ActivityAttributes {
             self.orderNumber = orderNumber
             self.destinationAddress = destinationAddress
             self.courierName = courierName
+            self.courierVehicle = courierVehicle
+            self.providerStatus = providerStatus
             self.etaAt = etaAt
             self.providerObservedAt = providerObservedAt
         }

@@ -256,7 +256,7 @@ public nonisolated final class AppDatabase: Sendable {
                 SELECT o."id", o."createdAt",
                        s."status", s."claimID", s."price", s."currency", s."tariff",
                        s."courierName", s."courierVehicle", s."etaMinutes",
-                       s."providerObservedAt"
+                       s."providerStatus", s."providerObservedAt"
                 FROM "orders" o
                 LEFT JOIN "orderProviderStates" s ON s."orderID" = o."id"
                 ORDER BY o."lastActivityAt" DESC
@@ -287,6 +287,7 @@ public nonisolated final class AppDatabase: Sendable {
                     courierName: row["courierName"],
                     courierVehicle: row["courierVehicle"],
                     etaMinutes: row["etaMinutes"],
+                    providerStatus: row["providerStatus"],
                     providerObservedAt: observedAt.map {
                         Date(timeIntervalSince1970: $0)
                     }
@@ -356,9 +357,9 @@ public nonisolated final class AppDatabase: Sendable {
             try db.execute(sql: """
                 INSERT INTO "orderProviderStates"
                   ("orderID", "claimID", "status", "tariff", "price", "currency",
-                   "courierName", "courierVehicle", "etaMinutes",
+                   "courierName", "courierVehicle", "etaMinutes", "providerStatus",
                    "providerObservedAt", "mirroredAt")
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT("orderID") DO UPDATE SET
                   "claimID" = excluded."claimID",
                   "status" = excluded."status",
@@ -368,6 +369,7 @@ public nonisolated final class AppDatabase: Sendable {
                   "courierName" = excluded."courierName",
                   "courierVehicle" = excluded."courierVehicle",
                   "etaMinutes" = excluded."etaMinutes",
+                  "providerStatus" = excluded."providerStatus",
                   "providerObservedAt" = CASE
                     WHEN excluded."providerObservedAt" IS NULL
                       THEN "providerObservedAt"
@@ -380,6 +382,7 @@ public nonisolated final class AppDatabase: Sendable {
                     order.id, order.claimID, order.status.rawValue,
                     order.tariff, order.price, order.currency,
                     order.courierName, order.courierVehicle, order.etaMinutes,
+                    order.providerStatus,
                     providerObservedAt?.timeIntervalSince1970,
                     Date.now.timeIntervalSince1970,
                 ]))

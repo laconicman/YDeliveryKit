@@ -381,7 +381,8 @@ struct PersistenceTests {
             created: .now, status: .active,
             route: [RoutePoint(latitude: 55, longitude: 37, address: "А")],
             claimID: "claim-eta",
-            courierName: "Сергей", courierVehicle: "м 234 ор 77", etaMinutes: 14)
+            courierName: "Сергей", courierVehicle: "м 234 ор 77", etaMinutes: 14,
+            providerStatus: "pickuped")
 
         try database.recordOrder(order, providerObservedAt: observed)
         let stored = try #require(database.readOrders().first)
@@ -389,6 +390,8 @@ struct PersistenceTests {
         #expect(stored.courierName == "Сергей")
         #expect(stored.courierVehicle == "м 234 ор 77")
         #expect(stored.etaMinutes == 14)
+        #expect(stored.providerStatus == "pickuped",
+                "the wire's own phase word rides the flat order — «у двери» ≠ «едет»")
         #expect(stored.providerObservedAt == observed)
         #expect(stored.etaAt == observed.addingTimeInterval(14 * 60),
                 "the arrival moment is the provider's clock plus its own estimate")
