@@ -28,6 +28,14 @@ struct CompactAddressTests {
         #expect(point.compactAddress == "Каширское шоссе, 52")
     }
 
+    @Test("«street, number, door» has no city — a digit-only second segment vetoes the drop")
+    func streetWithDoorStays() {
+        let point = RoutePoint(
+            latitude: 0, longitude: 0,
+            address: "Каширское шоссе, 52, подъезд 3")
+        #expect(point.compactAddress == "Каширское шоссе, 52, подъезд 3")
+    }
+
     @Test("A leading segment with digits is a number, not a city — kept")
     func numberedFirstStays() {
         let point = RoutePoint(

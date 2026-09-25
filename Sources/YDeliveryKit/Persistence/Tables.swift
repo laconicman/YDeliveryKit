@@ -110,7 +110,8 @@ nonisolated struct OrderItemRow: Identifiable {
 /// A sender-owned field value on the order — shared tier: collaborators read the
 /// same «Заказ 4417». `fieldRef` is a value → `CustomFieldDefinitionRow.id`, not
 /// an FK: the schema is private-tier, and a value outlives its definition on the
-/// `name` snapshot.
+/// `name`/`carrier` snapshots — `carrier` denormalized because a collaborator
+/// cannot join the private tier to ask "which slot was this".
 @Table("orderCustomFields")
 nonisolated struct OrderCustomFieldRow: Identifiable {
     let id: UUID
@@ -118,6 +119,9 @@ nonisolated struct OrderCustomFieldRow: Identifiable {
     var fieldRef = UUID()
     var name = ""
     var value = ""
+    /// `CustomFieldDefinition.Carrier.rawValue`, snapshotted at write — nil on
+    /// rows written before the column existed.
+    var carrier: String?
 }
 
 @Table("providerEvents")

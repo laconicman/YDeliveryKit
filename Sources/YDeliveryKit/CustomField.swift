@@ -78,8 +78,11 @@ public nonisolated struct CustomFieldDefinition: Codable, Hashable, Identifiable
 ///
 /// `fieldRef` is a value, not an FK: the schema it points into is private-tier,
 /// and a value must outlive its definition — deleting «Накладная» from settings
-/// cannot erase «Накладная 77» off last month's delivery. `name` is the
-/// snapshot that renders when the definition is gone.
+/// cannot erase «Накладная 77» off last month's delivery. `name` and `carrier`
+/// are the snapshots that render and identify when the definition is gone —
+/// and `carrier` specifically is what lets a *collaborator* read the order
+/// number: their tier never sees `customFieldDefinitions`, so a join that
+/// needs it returns nothing (review, Kit PR #8; TechDebt YD-17).
 public nonisolated struct OrderCustomField: Codable, Hashable, Identifiable, Sendable {
     /// Derived: `orderID ‖ fieldRef` — a replayed write merges, never duplicates.
     public var id: UUID
@@ -87,8 +90,13 @@ public nonisolated struct OrderCustomField: Codable, Hashable, Identifiable, Sen
     public var fieldRef: CustomFieldDefinition.ID
     public var name: String
     public var value: String
+    /// The definition's carrier at write time — copied, not joined, for the
+    /// same reason `name` snapshots: the slot this value claimed is a fact
+    /// about the order's history, not about today's schema.
+    public var carrier: CustomFieldDefinition.Carrier?
 
-    public init(orderID: Order.ID, fieldRef: CustomFieldDefinition.ID, name: String, value: String) {
+    public init(orderID: Order.ID, fieldRef: CustomFieldDefinition.ID, name: String,
+                value: String, carrier: CustomFieldDefinition.Carrier? = nil) {
         self.id = UUID.derived(
             namespace: UUID.DerivedNamespace.orderCustomField,
             orderID.uuidString, fieldRef.uuidString)
@@ -96,5 +104,6 @@ public nonisolated struct OrderCustomField: Codable, Hashable, Identifiable, Sen
         self.fieldRef = fieldRef
         self.name = name
         self.value = value
+        self.carrier = carrier
     }
 }

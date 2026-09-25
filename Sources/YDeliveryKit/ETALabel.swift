@@ -29,17 +29,36 @@ public struct ETALabel: View {
     }
 
     let at: Date?
+    let observedAt: Date?
     let confidence: Confidence
     let presentation: Presentation
 
+    /// `at` is the arrival moment (`Order.etaAt`); `observedAt` is the
+    /// provider's as-of stamp. The `.duration` form reads `at − observedAt` —
+    /// the vendor's own estimate, rendered once — because a timeline style
+    /// (`.relative`) would keep recounting as the clock ticks, turning one
+    /// observation into a fake countdown (review, Kit PR #8). Without a stamp
+    /// it freezes `at − now` at render; either way the text itself never moves.
     public init(
         at: Date?,
+        observedAt: Date? = nil,
         confidence: Confidence = .estimate,
         presentation: Presentation = .clock
     ) {
         self.at = at
+        self.observedAt = observedAt
         self.confidence = confidence
         self.presentation = presentation
+    }
+
+    /// The wait as a fixed figure — the estimate's own minutes, floored at
+    /// zero: a lapsed ETA is a stale sighting, not a debt of negative time.
+    /// A plain string because the label must never tick (see `init`).
+    nonisolated static func durationString(at: Date, observedAt: Date?) -> String {
+        let interval = max(0, at.timeIntervalSince(observedAt ?? .now))
+        let minutes = (interval / 60).rounded()
+        return Measurement(value: minutes, unit: UnitDuration.minutes)
+            .formatted(.measurement(width: .abbreviated))
     }
 
     public var body: some View {
@@ -54,22 +73,21 @@ public struct ETALabel: View {
                 + Text(" ")
                 + Text(at, style: .time)
         case .duration:
-            // `.relative` renders the wait in the locale's own words —
-            // «через 14 мин» / "in 14 min" — so the only thing to mark is the
-            // estimate's tilde.
             switch confidence {
-            case .estimate: Text("~") + Text(at, style: .relative)
-            case .confirmed: Text(at, style: .relative)
+            case .estimate: Text("~") + Text(Self.durationString(at: at, observedAt: observedAt))
+            case .confirmed: Text(Self.durationString(at: at, observedAt: observedAt))
             }
         }
     }
 }
 
 #Preview("Three readings of one wait") {
-    let eta = Date.now.addingTimeInterval(14 * 60)
-    VStack(alignment: .leading, spacing: 8) {
-        ETALabel(at: eta, presentation: .clock)
-        ETALabel(at: eta, presentation: .duration)
+    let observed = Date.now
+    VStack(alignment: .leading, spacing: Layout.Spacing.unit) {
+        ETALabel(at: observed.addingTimeInterval(14 * 60),
+                 observedAt: observed, presentation: .clock)
+        ETALabel(at: observed.addingTimeInterval(14 * 60),
+                 observedAt: observed, presentation: .duration)
         ETALabel(at: nil, presentation: .duration)
     }
     .padding()

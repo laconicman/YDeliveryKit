@@ -80,7 +80,9 @@ extension OrderStatus {
     }
 
     /// The paired glyph — `nil` only for draft, whose table row is "— · «Черновик»".
-    var symbol: SFSymbol? {
+    /// Public for surfaces that draw the glyph without the capsule (a Live
+    /// Activity's island icon, a lock-screen accessory).
+    public var symbol: SFSymbol? {
         switch self {
         case .draft: nil
         case .searching: .circleDotted
@@ -93,7 +95,7 @@ extension OrderStatus {
 
     /// The paired words. Localized in the package bundle so every consumer — app, widget,
     /// notification — says exactly the same thing.
-    var words: LocalizedStringResource {
+    public var words: LocalizedStringResource {
         switch self {
         case .draft: LocalizedStringResource("Draft", bundle: .kit)
         case .searching: LocalizedStringResource("Finding a courier", bundle: .kit)

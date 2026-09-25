@@ -95,6 +95,12 @@ public nonisolated final class AppDatabase: Sendable {
                         ALTER TABLE "\(migration.table)"
                         ADD COLUMN "\(migration.column)" \(migration.type)
                         """)
+                    // A snapshot column (e.g. `orderCustomFields.carrier`) can
+                    // be filled for rows that predate it — same constant-SQL
+                    // rule as the ALTER itself.
+                    if let backfill = migration.backfill {
+                        try db.execute(sql: backfill)
+                    }
                 }
             }
         }
@@ -314,7 +320,10 @@ public nonisolated final class AppDatabase: Sendable {
     /// stamp is at least as new as the stored observation — a delayed answer
     /// describes older provider truth and must not regress any of the fields it
     /// carries, route included (review, PR #7). Unstamped writes are local
-    /// edits and always apply.
+    /// edits and always apply — but only to the fields the sender owns: the
+    /// courier/ETA/provider-word columns move on stamped writes alone, so a
+    /// stale in-memory `Order` editing a route cannot rewind a fresher
+    /// sighting's courier (review, Kit PR #8).
     public func recordOrder(_ order: Order, customFields: [OrderCustomField]? = nil,
                             providerObservedAt: Date? = nil) throws {
         // A draft is not an order — it has no provider existence, and writing one
@@ -348,10 +357,11 @@ public nonisolated final class AppDatabase: Sendable {
                         order.id.uuidString, field.fieldRef.uuidString)
                     try db.execute(sql: """
                         INSERT INTO "orderCustomFields"
-                          ("id", "orderID", "fieldRef", "name", "value")
-                        VALUES (?, ?, ?, ?, ?)
+                          ("id", "orderID", "fieldRef", "name", "value", "carrier")
+                        VALUES (?, ?, ?, ?, ?, ?)
                         """, arguments: Self.args([rowID, order.id, field.fieldRef,
-                                                   field.name, field.value]))
+                                                   field.name, field.value,
+                                                   field.carrier?.rawValue]))
                 }
             }
             try db.execute(sql: """
@@ -366,10 +376,24 @@ public nonisolated final class AppDatabase: Sendable {
                   "tariff" = excluded."tariff",
                   "price" = excluded."price",
                   "currency" = excluded."currency",
-                  "courierName" = excluded."courierName",
-                  "courierVehicle" = excluded."courierVehicle",
-                  "etaMinutes" = excluded."etaMinutes",
-                  "providerStatus" = excluded."providerStatus",
+                  -- The courier/ETA/provider-word columns are provider-owned
+                  -- mirror values: only a *stamped* merge (a sighting with the
+                  -- provider's as-of time) may rewrite them. An unstamped write
+                  -- is a local edit — a stale in-memory Order must not regress
+                  -- a fresher sighting's courier while keeping its stamp
+                  -- (review, Kit PR #8).
+                  "courierName" = CASE
+                    WHEN excluded."providerObservedAt" IS NOT NULL
+                      THEN excluded."courierName" ELSE "courierName" END,
+                  "courierVehicle" = CASE
+                    WHEN excluded."providerObservedAt" IS NOT NULL
+                      THEN excluded."courierVehicle" ELSE "courierVehicle" END,
+                  "etaMinutes" = CASE
+                    WHEN excluded."providerObservedAt" IS NOT NULL
+                      THEN excluded."etaMinutes" ELSE "etaMinutes" END,
+                  "providerStatus" = CASE
+                    WHEN excluded."providerObservedAt" IS NOT NULL
+                      THEN excluded."providerStatus" ELSE "providerStatus" END,
                   "providerObservedAt" = CASE
                     WHEN excluded."providerObservedAt" IS NULL
                       THEN "providerObservedAt"
@@ -660,21 +684,27 @@ public nonisolated final class AppDatabase: Sendable {
     }
 
     private static func orderCustomField(_ row: Row) -> OrderCustomField {
-        OrderCustomField(
+        let carrier: String? = row["carrier"]
+        return OrderCustomField(
             orderID: row["orderID"], fieldRef: row["fieldRef"],
-            name: row["name"], value: row["value"])
+            name: row["name"], value: row["value"],
+            carrier: carrier.flatMap(CustomFieldDefinition.Carrier.init(rawValue:)))
     }
 
     /// The sender's own number for an order — the value the order-number carrier
-    /// carried — as a straight SQL join so surfaces that only read the store
-    /// (a widget's timeline, a Live Activity update) resolve it without the
-    /// app's in-memory field lists.
+    /// carried — read off the value row's own `carrier` snapshot: the definitions
+    /// it would join are private-tier, so a collaborator (or a deleted schema)
+    /// has nothing to join against (review, Kit PR #8). The LEFT JOIN supplies
+    /// only ordering — definition position first, `fieldRef` as the stable
+    /// fallback — so two carrier-conflicting values pick one winner everywhere.
     public func orderNumber(for orderID: Order.ID) throws -> String? {
         try queue.read { db in
             try String.fetchOne(db, sql: """
                 SELECT f."value" FROM "orderCustomFields" f
-                JOIN "customFieldDefinitions" d ON d."id" = f."fieldRef"
-                WHERE f."orderID" = ? AND d."carrier" = 'orderNumber'
+                LEFT JOIN "customFieldDefinitions" d ON d."id" = f."fieldRef"
+                WHERE f."orderID" = ? AND f."carrier" = 'orderNumber'
+                ORDER BY (d."position" IS NULL), d."position", f."fieldRef"
+                LIMIT 1
                 """, arguments: Self.args([orderID]))
         }
     }

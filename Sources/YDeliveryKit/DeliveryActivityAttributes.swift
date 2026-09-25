@@ -48,6 +48,11 @@ public nonisolated struct DeliveryActivityAttributes: ActivityAttributes {
         /// surface must show so a dead activity never looks live (the shared
         /// "provider freshness, always" contract).
         public var providerObservedAt: Date?
+        /// The recipient's phone — board `5a`'s «Получателю» button dials the
+        /// person at the destination door. (The courier's own number is one
+        /// the wire never sends — `performer_info` carries name and vehicle
+        /// only — so «Курьеру» has nothing to dial and the surface omits it.)
+        public var destinationPhone: String?
 
         public init(
             status: OrderStatus,
@@ -57,7 +62,8 @@ public nonisolated struct DeliveryActivityAttributes: ActivityAttributes {
             courierVehicle: String? = nil,
             providerStatus: String? = nil,
             etaAt: Date? = nil,
-            providerObservedAt: Date? = nil
+            providerObservedAt: Date? = nil,
+            destinationPhone: String? = nil
         ) {
             self.status = status
             self.orderNumber = orderNumber
@@ -67,6 +73,7 @@ public nonisolated struct DeliveryActivityAttributes: ActivityAttributes {
             self.providerStatus = providerStatus
             self.etaAt = etaAt
             self.providerObservedAt = providerObservedAt
+            self.destinationPhone = destinationPhone
         }
     }
 
