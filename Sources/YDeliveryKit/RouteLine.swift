@@ -51,13 +51,17 @@ public struct RouteLine: View {
     /// back to position. `nonisolated` — pure value mapping must not trap off
     /// the main actor (Swift Testing's pool).
     public nonisolated static func stops(from points: [RoutePoint]) -> [Stop] {
-        points.enumerated().map { index, point in
+        // The delivery's end — the last non-return — not the array's last seat:
+        // roleless points read as drop-offs, so the count still answers for
+        // rows written before roles rode the store.
+        let end = points.destinationIndex
+        return points.enumerated().map { index, point in
             Stop(
                 role: point.role.map {
-                    Self.badgeRole(of: $0, at: index, count: points.count)
+                    Self.badgeRole(of: $0, at: index, destinationIndex: end)
                 } ?? (index == 0
                       ? .start
-                      : index == points.count - 1 ? .end : .stop(number: index + 1)),
+                      : index == end ? .end : .stop(number: index + 1)),
                 title: point.address,
                 subtitle: point.contactSummary
             )
@@ -65,15 +69,16 @@ public struct RouteLine: View {
     }
 
     /// A carried role to its mark: the origin ring for a pickup, the return
-    /// mark for the courier's leg back, and a drop-off — the only role that can
-    /// repeat mid-route — is the teardrop at the route's end, numbered between.
+    /// mark for the courier's leg back, and the teardrop for the drop-off that
+    /// is the delivery's end — the last *non-return*, so a return leg riding
+    /// last leaves the destination's mark where the parcel actually lands.
     private nonisolated static func badgeRole(
-        of role: RoutePoint.Role, at index: Int, count: Int
+        of role: RoutePoint.Role, at index: Int, destinationIndex: Int?
     ) -> PointBadge.Role {
         switch role {
         case .pickup: .start
         case .return: .returnPoint
-        case .dropoff: index == count - 1 ? .end : .stop(number: index + 1)
+        case .dropoff: index == destinationIndex ? .end : .stop(number: index + 1)
         }
     }
 
