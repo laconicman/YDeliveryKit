@@ -271,7 +271,7 @@ public nonisolated final class AppDatabase: Sendable {
                 SELECT * FROM "routeStops" ORDER BY "orderID", "position"
                 """).reduce(into: [UUID: [RoutePoint]]()) { grouped, row in
                 let orderID: UUID = row["orderID"]
-                grouped[orderID, default: []].append(Self.routePoint(row))
+                grouped[orderID, default: []].append(Self.routeStop(row))
             }
             return rows.map { row in
                 let id: UUID = row["id"]
@@ -340,10 +340,22 @@ public nonisolated final class AppDatabase: Sendable {
             }
             try Self.upsert(order, provider: provider,
                             providerAccountRef: providerAccountRef, into: db)
+            // The visit columns are provider-owned like the courier fields below:
+            // an unstamped write is a local edit and must not erase what a
+            // sighting recorded at the door — each stop re-adopts the stored
+            // visit of the stop at the same destination (matched on
+            // `destinationKey`, not position, so a reordered route keeps each
+            // stop's record). A stamped merge is provider truth and writes
+            // verbatim — it alone may update or clear a visit (review, PR #10).
+            var effective = order
+            if providerObservedAt == nil {
+                effective.route = try Self.reinstatingStoredVisits(
+                    of: order, in: db)
+            }
             try db.execute(sql: """
                 DELETE FROM "routeStops" WHERE "orderID" = ?
                 """, arguments: Self.args([order.id]))
-            try Self.insertStops(of: order, into: db, upsert: true)
+            try Self.insertStops(of: effective, into: db, upsert: true)
             if let customFields {
                 try db.execute(sql: """
                     DELETE FROM "orderCustomFields" WHERE "orderID" = ?
@@ -460,6 +472,37 @@ public nonisolated final class AppDatabase: Sendable {
                             Date.now.timeIntervalSince1970]))
     }
 
+    /// The route an unstamped write may safely write: each point re-adopts the
+    /// stored visit of the stop at its destination, so a local edit can't NULL
+    /// out provider truth the mirror still stamps as fresh. Matching is by
+    /// `destinationKey` — an address edit drops the visit (the courier's arrival
+    /// was at the old address) where a reorder keeps it; two stops at the same
+    /// door consume the stored records in position order. A supplied visit where
+    /// nothing is stored is *initial* data — the same latitude an INSERT gives
+    /// the courier columns — and the stored record wins whenever both exist.
+    private static func reinstatingStoredVisits(
+        of order: Order, in db: Database
+    ) throws -> [RoutePoint] {
+        var stored: [String: [RoutePoint.Visit]] = [:]
+        for row in try Row.fetchAll(db, sql: """
+            SELECT * FROM "routeStops" WHERE "orderID" = ? ORDER BY "position"
+            """, arguments: Self.args([order.id])) {
+            let stop = Self.routeStop(row)
+            if let visit = stop.visit {
+                stored[stop.destinationKey, default: []].append(visit)
+            }
+        }
+        guard !stored.isEmpty else { return order.route }
+        return order.route.map { point in
+            var point = point
+            if var visits = stored[point.destinationKey], !visits.isEmpty {
+                point.visit = visits.removeFirst()
+                stored[point.destinationKey] = visits
+            }
+            return point
+        }
+    }
+
     private static func insertStops(of order: Order, into db: Database, upsert: Bool) throws {
         for (index, point) in order.route.enumerated() {
             let id = UUID.derived(
@@ -494,6 +537,9 @@ public nonisolated final class AppDatabase: Sendable {
         }
     }
 
+    /// Decodes the columns every point-bearing table shares — `routeStops` and
+    /// `savedPlaces` alike. Provider columns stay out: a saved place has no
+    /// courier, so this reader never touches a column a caller's schema lacks.
     private static func routePoint(_ row: Row) -> RoutePoint {
         let entrance: String? = row["entrance"]
         let floor: String? = row["floor"]
@@ -504,18 +550,6 @@ public nonisolated final class AppDatabase: Sendable {
             : AddressParts(
                 entrance: entrance ?? "", floor: floor ?? "",
                 apartment: apartment ?? "", intercom: intercom ?? "")
-        // REAL epoch columns, optional: annotate so the subscript decodes NULL
-        // rather than binding Value to non-optional Double and trapping (PR #9).
-        let visitedAt: Double? = row["visitedAt"]
-        let expectedVisitAt: Double? = row["expectedVisitAt"]
-        let visitStatus: String? = row["visitStatus"]
-        let visit = visitStatus.flatMap(RoutePoint.PointVisitStatus.init(rawValue:))
-            .map { status in
-                RoutePoint.Visit(
-                    status: status,
-                    visitedAt: visitedAt.map { Date(timeIntervalSince1970: $0) },
-                    expectedAt: expectedVisitAt.map { Date(timeIntervalSince1970: $0) })
-            }
         return RoutePoint(
             latitude: row["latitude"], longitude: row["longitude"],
             address: row["address"], addressParts: parts,
@@ -523,8 +557,26 @@ public nonisolated final class AppDatabase: Sendable {
             contactGivenName: row["contactGivenName"],
             contactFamilyName: row["contactFamilyName"],
             contactPhone: row["contactPhone"],
-            contactPhoneExtension: row["contactPhoneExtension"],
-            visit: visit)
+            contactPhoneExtension: row["contactPhoneExtension"])
+    }
+
+    /// A `routeStops` row: the shared point columns plus the provider's visit
+    /// record, which only this table carries.
+    private static func routeStop(_ row: Row) -> RoutePoint {
+        var point = routePoint(row)
+        // REAL epoch columns, optional: annotate so the subscript decodes NULL
+        // rather than binding Value to non-optional Double and trapping (PR #9).
+        let visitedAt: Double? = row["visitedAt"]
+        let expectedVisitAt: Double? = row["expectedVisitAt"]
+        let visitStatus: String? = row["visitStatus"]
+        point.visit = visitStatus.flatMap(RoutePoint.PointVisitStatus.init(rawValue:))
+            .map { status in
+                RoutePoint.Visit(
+                    status: status,
+                    visitedAt: visitedAt.map { Date(timeIntervalSince1970: $0) },
+                    expectedAt: expectedVisitAt.map { Date(timeIntervalSince1970: $0) })
+            }
+        return point
     }
 
     // MARK: - Saved places

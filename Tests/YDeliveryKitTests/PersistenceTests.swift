@@ -549,6 +549,78 @@ struct PersistenceTests {
                 "a row written before visits reads them absent")
     }
 
+    /// The visit columns obey the same rule as the courier mirror one level up
+    /// (review, PR #10): an unstamped write is a *local* edit, and an in-memory
+    /// copy from before the last sighting — or one whose points carry a stale
+    /// visit — must not erase what the provider recorded at the door.
+    @Test("A local edit cannot erase a sighting's visit records")
+    func unstampedWritePreservesVisitMirror() throws {
+        let database = makeDatabase()
+        let visitedAt = Date(timeIntervalSince1970: 1_700_001_000)
+        var order = Order(
+            created: .now, status: .active,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "Забор")],
+            claimID: "c-visits")
+        try database.recordOrder(order)
+
+        // The sighting: the courier arrived at the pickup door.
+        order.route[0].visit = .init(status: .visited, visitedAt: visitedAt)
+        try database.recordOrder(order, providerObservedAt: .now)
+
+        // The local edit: an in-memory copy that never learned of the visit —
+        // and even one carrying a *stale* visit — cannot regress the record.
+        var staleLocal = order
+        staleLocal.route[0].visit = .init(status: .pending)
+        staleLocal.route[0].contactPhone = "+7 900 000-00-00"
+        try database.recordOrder(staleLocal)
+
+        let stored = try #require(database.readOrders().first)
+        #expect(stored.route[0].visit?.status == .visited,
+                "the stored record wins over a stale local copy")
+        #expect(stored.route[0].visit?.visitedAt == visitedAt)
+        #expect(stored.route[0].contactPhone == "+7 900 000-00-00",
+                "while the sender's own edit still applied")
+
+        // And a point with no visit supplied re-adopts the stored record too.
+        var bareLocal = order
+        bareLocal.route[0].visit = nil
+        try database.recordOrder(bareLocal)
+        #expect(try database.readOrders().first?.route[0].visit?.status == .visited)
+    }
+
+    /// Stops match by destination, not position: a local write that reorders
+    /// the route keeps each visit attached to its own stop (review, PR #10).
+    @Test("A reordered route keeps each stop's visit record")
+    func reorderKeepsVisitAttribution() throws {
+        let database = makeDatabase()
+        let visitedAt = Date(timeIntervalSince1970: 1_700_001_000)
+        var order = Order(
+            created: .now, status: .active,
+            route: [
+                RoutePoint(latitude: 55, longitude: 37, address: "Первый"),
+                RoutePoint(latitude: 55.1, longitude: 37.1, address: "Второй"),
+            ],
+            claimID: "c-reorder")
+        order.route[0].visit = .init(status: .visited, visitedAt: visitedAt)
+        order.route[1].visit = .init(status: .pending)
+        try database.recordOrder(order, providerObservedAt: .now)
+
+        // A local write replays the same destinations swapped — the visit
+        // follows its stop, not its slot.
+        var reordered = order
+        reordered.route = [order.route[1], order.route[0]]
+        reordered.route[0].visit = nil
+        reordered.route[1].visit = nil
+        try database.recordOrder(reordered)
+
+        let stored = try #require(database.readOrders().first)
+        #expect(stored.route[0].address == "Второй")
+        #expect(stored.route[0].visit?.status == .pending)
+        #expect(stored.route[1].address == "Первый")
+        #expect(stored.route[1].visit?.status == .visited)
+        #expect(stored.route[1].visit?.visitedAt == visitedAt)
+    }
+
     /// The collaborator's read (Kit PR #8): the schema is private-tier, so the
     /// value row's own `carrier` snapshot is the only thing a shared order can
     /// answer from — no join, no definition.

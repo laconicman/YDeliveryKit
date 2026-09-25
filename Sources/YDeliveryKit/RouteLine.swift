@@ -154,3 +154,19 @@ public struct RouteLine: View {
     ])
     .padding()
 }
+
+#Preview("Selectable — the callout's list twin") {
+    struct SelectablePreview: View {
+        @State private var selection: Int? = 1
+        var body: some View {
+            RouteLine(stops: [
+                .init(role: .start, title: "Москва, ул Москворечье, 6",
+                      subtitle: "Picked up at 14:32"),
+                .init(role: .end, title: "Москва, Каширское шоссе, 52",
+                      subtitle: "Expected at 15:10"),
+            ], selection: $selection)
+            .padding()
+        }
+    }
+    return SelectablePreview()
+}
