@@ -24,16 +24,24 @@ public struct RouteLine: View {
 
     public let stops: [Stop]
 
-    public init(stops: [Stop]) {
+    /// Non-nil makes the rows selectable: a tap writes the stop's index and the
+    /// selected row shows it — the map callout's pin↔row agreement, and the
+    /// VoiceOver path to the callout's content (a callout is never the only
+    /// route to anything, board `4a`). Nil keeps the line inert — the stored
+    /// default everywhere else.
+    public var selection: Binding<Int?>?
+
+    public init(stops: [Stop], selection: Binding<Int?>? = nil) {
         self.stops = stops
+        self.selection = selection
     }
 
     /// A stored route, mapped: position derives the mark — first the ring, last the
     /// teardrop, middles their number (the `2c` mapping) — and the point's contact
     /// summary rides the subtitle. A stored route carries no role column yet
     /// (YDelivery TechDebt YD-15), so position is the honest source.
-    public init(points: [RoutePoint]) {
-        self.init(stops: Self.stops(from: points))
+    public init(points: [RoutePoint], selection: Binding<Int?>? = nil) {
+        self.init(stops: Self.stops(from: points), selection: selection)
     }
 
     /// The `2c` mapping as data, so it is testable without rendering: ends are
@@ -62,20 +70,27 @@ public struct RouteLine: View {
     /// Chrome, not meaning — the shape carries the route, so the spine takes the
     /// subdued token and survives grayscale like the badges do.
     static let spineColor = Color.secondary
+    /// How loudly a selected row announces itself — a tint wash, not a border:
+    /// the badge column stays on the spine's terms. Public: every selectable
+    /// route row (the draft's included) washes with the same voice.
+    public static let selectionTint = 0.12
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(stops.enumerated()), id: \.offset) { index, stop in
-                row(stop, isLast: index == stops.count - 1)
+                row(stop, at: index, isLast: index == stops.count - 1)
             }
         }
     }
 
     /// One row: the mark over its spine segment, then address and contact. The spine
     /// is a row background — inter-row rhythm lives inside the row's bottom padding,
-    /// so the line stays continuous across it.
-    private func row(_ stop: Stop, isLast: Bool) -> some View {
-        HStack(alignment: .top, spacing: Layout.Spacing.gutter) {
+    /// so the line stays continuous across it. With a `selection` binding the row
+    /// is also the stop's button: tap selects, the selected row carries the tint —
+    /// the callout and its row agree because both read the one binding.
+    private func row(_ stop: Stop, at index: Int, isLast: Bool) -> some View {
+        let isSelected = selection?.wrappedValue == index
+        return HStack(alignment: .top, spacing: Layout.Spacing.gutter) {
             PointBadge(role: stop.role)
                 .frame(width: Self.badgeColumn, alignment: .center)
                 .frame(maxHeight: .infinity, alignment: .top)
@@ -104,7 +119,23 @@ public struct RouteLine: View {
             .padding(.bottom, isLast ? 0 : Layout.Spacing.unit)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .padding(.horizontal, selection == nil ? 0 : Layout.Spacing.chip)
+        .background {
+            if isSelected {
+                RoundedRectangle(cornerRadius: Layout.Radius.field)
+                    .fill(Color.accentColor.opacity(Self.selectionTint))
+            }
+        }
         .accessibilityElement(children: .combine)
+        // The button trait says the row answers; `.isSelected` says this row is
+        // the one whose callout is open — the wash has a spoken twin (PR #10).
+        .accessibilityAddTraits(
+            selection == nil ? [] : (isSelected ? [.isButton, .isSelected] : .isButton)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            selection?.wrappedValue = index
+        }
     }
 }
 
@@ -126,4 +157,20 @@ public struct RouteLine: View {
         .init(role: .returnPoint, title: "Склад — Санкт-Петербург, Невский, 100"),
     ])
     .padding()
+}
+
+#Preview("Selectable — the callout's list twin") {
+    struct SelectablePreview: View {
+        @State private var selection: Int? = 1
+        var body: some View {
+            RouteLine(stops: [
+                .init(role: .start, title: "Москва, ул Москворечье, 6",
+                      subtitle: "Picked up at 14:32"),
+                .init(role: .end, title: "Москва, Каширское шоссе, 52",
+                      subtitle: "Expected at 15:10"),
+            ], selection: $selection)
+            .padding()
+        }
+    }
+    return SelectablePreview()
 }

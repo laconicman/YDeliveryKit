@@ -179,8 +179,9 @@ extension PointBadge.Role {
     }
 
     /// The paired words — the badge never speaks to VoiceOver by shape alone. Localized
-    /// in the package bundle so every consumer says exactly the same thing.
-    var words: LocalizedStringResource {
+    /// in the package bundle so every consumer says exactly the same thing; public since
+    /// the map callout's header speaks the same vocabulary (the pin and its card agree).
+    public var words: LocalizedStringResource {
         switch self {
         case .start:
             LocalizedStringResource("Pickup", bundle: .kit)

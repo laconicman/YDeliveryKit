@@ -81,6 +81,11 @@ nonisolated struct RouteStopRow: Identifiable {
     var contactFamilyName: String?
     var contactPhone: String?
     var contactPhoneExtension: String?
+    /// Provider visit truth — written only through provider-sighted merges:
+    /// the courier's account of this stop, nil for sender-authored points.
+    var visitStatus: String?
+    var visitedAt: Double?
+    var expectedVisitAt: Double?
 }
 
 /// Parcel contents. `pickupStopRef`/`dropoffStopRef` are *values* → `RouteStopRow.id`;

@@ -40,7 +40,8 @@ nonisolated extension AppDatabase {
           "address" TEXT NOT NULL,
           "entrance" TEXT, "floor" TEXT, "apartment" TEXT, "intercom" TEXT,
           "contactName" TEXT, "contactGivenName" TEXT, "contactFamilyName" TEXT,
-          "contactPhone" TEXT, "contactPhoneExtension" TEXT
+          "contactPhone" TEXT, "contactPhoneExtension" TEXT,
+          "visitStatus" TEXT, "visitedAt" REAL, "expectedVisitAt" REAL
         ) STRICT;
         CREATE TABLE IF NOT EXISTS "\(OrderItemRow.tableName)" (
           "id" TEXT PRIMARY KEY NOT NULL ON CONFLICT REPLACE DEFAULT (uuid()),
@@ -162,5 +163,8 @@ nonisolated extension AppDatabase {
               SELECT "carrier" FROM "customFieldDefinitions"
               WHERE "customFieldDefinitions"."id" = "orderCustomFields"."fieldRef")
             """),
+        (RouteStopRow.tableName, "visitStatus", "TEXT", nil),
+        (RouteStopRow.tableName, "visitedAt", "REAL", nil),
+        (RouteStopRow.tableName, "expectedVisitAt", "REAL", nil),
     ]
 }
