@@ -462,6 +462,93 @@ struct PersistenceTests {
                 "and the local edit itself — the sender's field — applied")
     }
 
+    /// The callout's mini-timeline data (board `4a`): each stop's provider
+    /// visit — status, the handover's actual stamp, the estimate while it
+    /// waits — round-trips per point, and a sender-authored point reads none.
+    @Test("Per-stop visit state round-trips through routeStops")
+    func visitStateRoundTrips() throws {
+        let database = makeDatabase()
+        let visitedAt = Date(timeIntervalSince1970: 1_700_001_000)
+        let expectedAt = Date(timeIntervalSince1970: 1_700_005_000)
+        let order = Order(
+            created: .now, status: .active,
+            route: [
+                RoutePoint(latitude: 55, longitude: 37, address: "Забор",
+                           visit: .init(status: .visited, visitedAt: visitedAt)),
+                RoutePoint(latitude: 55.1, longitude: 37.1, address: "Доставка",
+                           visit: .init(status: .pending, expectedAt: expectedAt)),
+                RoutePoint(latitude: 55.2, longitude: 37.2, address: "Черновик"),
+            ],
+            claimID: "claim-visits")
+
+        try database.recordOrder(order, providerObservedAt: .now)
+        let stored = try #require(database.readOrders().first)
+
+        #expect(stored.route[0].visit?.status == .visited)
+        #expect(stored.route[0].visit?.visitedAt == visitedAt)
+        #expect(stored.route[1].visit?.status == .pending)
+        #expect(stored.route[1].visit?.expectedAt == expectedAt)
+        #expect(stored.route[2].visit == nil,
+                "a point the provider never reported on carries no visit box")
+    }
+
+    /// The visit columns land on databases born before them: guarded ALTERs,
+    /// existing stop rows intact, the new fields reading absent.
+    @Test("A pre-visit routeStops table gains the columns, stops intact")
+    func visitColumnsMigrate() throws {
+        let raw = try DatabaseQueue(
+            path: directory.appendingPathComponent(AppDatabase.filename).path)
+        try raw.write { db in
+            try db.execute(sql: """
+                CREATE TABLE "orders" (
+                  "id" TEXT PRIMARY KEY NOT NULL,
+                  "createdAt" REAL NOT NULL,
+                  "providerAccountRef" TEXT,
+                  "provider" TEXT NOT NULL,
+                  "lastActivityAt" REAL NOT NULL
+                ) STRICT;
+                CREATE TABLE "routeStops" (
+                  "id" TEXT PRIMARY KEY NOT NULL,
+                  "orderID" TEXT NOT NULL
+                    REFERENCES "orders"("id") ON DELETE CASCADE,
+                  "position" INTEGER NOT NULL, "role" TEXT NOT NULL,
+                  "latitude" REAL NOT NULL, "longitude" REAL NOT NULL,
+                  "address" TEXT NOT NULL,
+                  "entrance" TEXT, "floor" TEXT, "apartment" TEXT, "intercom" TEXT,
+                  "contactName" TEXT, "contactGivenName" TEXT, "contactFamilyName" TEXT,
+                  "contactPhone" TEXT, "contactPhoneExtension" TEXT
+                ) STRICT;
+                INSERT INTO "orders"
+                  ("id", "createdAt", "provider", "lastActivityAt")
+                VALUES ('00000000-0000-0000-0000-000000000001',
+                        1700000000, 'test', 1700000000);
+                INSERT INTO "routeStops"
+                  ("id", "orderID", "position", "role",
+                   "latitude", "longitude", "address")
+                VALUES ('00000000-0000-0000-0000-000000000002',
+                        '00000000-0000-0000-0000-000000000001',
+                        0, 'pickup', 55, 37, 'Москворечье, 6');
+                """)
+        }
+
+        let database = makeDatabase()
+        let columns = try database.queue.read { db in
+            try String.fetchAll(db, sql: """
+                SELECT "name" FROM pragma_table_info('routeStops')
+                """)
+        }
+        #expect(columns.contains("visitStatus")
+                && columns.contains("visitedAt")
+                && columns.contains("expectedVisitAt"),
+                "the three visit columns all arrived")
+
+        let stored = try #require(database.readOrders().first)
+        #expect(stored.route.first?.address == "Москворечье, 6",
+                "the pre-existing stop survived the ALTER")
+        #expect(stored.route.first?.visit == nil,
+                "a row written before visits reads them absent")
+    }
+
     /// The collaborator's read (Kit PR #8): the schema is private-tier, so the
     /// value row's own `carrier` snapshot is the only thing a shared order can
     /// answer from — no join, no definition.

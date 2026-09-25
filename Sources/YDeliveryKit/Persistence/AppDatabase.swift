@@ -471,8 +471,9 @@ public nonisolated final class AppDatabase: Sendable {
                    "latitude", "longitude", "address",
                    "entrance", "floor", "apartment", "intercom",
                    "contactName", "contactGivenName", "contactFamilyName",
-                   "contactPhone", "contactPhoneExtension")
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   "contactPhone", "contactPhoneExtension",
+                   "visitStatus", "visitedAt", "expectedVisitAt")
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, arguments: Self.args([
                     id, order.id, index,
                     index == 0 ? "pickup" : "dropoff",
@@ -486,6 +487,9 @@ public nonisolated final class AppDatabase: Sendable {
                     point.contactFamilyName,
                     point.contactPhone,
                     point.contactPhoneExtension,
+                    point.visit?.status.rawValue,
+                    point.visit?.visitedAt?.timeIntervalSince1970,
+                    point.visit?.expectedAt?.timeIntervalSince1970,
                 ]))
         }
     }
@@ -500,6 +504,18 @@ public nonisolated final class AppDatabase: Sendable {
             : AddressParts(
                 entrance: entrance ?? "", floor: floor ?? "",
                 apartment: apartment ?? "", intercom: intercom ?? "")
+        // REAL epoch columns, optional: annotate so the subscript decodes NULL
+        // rather than binding Value to non-optional Double and trapping (PR #9).
+        let visitedAt: Double? = row["visitedAt"]
+        let expectedVisitAt: Double? = row["expectedVisitAt"]
+        let visitStatus: String? = row["visitStatus"]
+        let visit = visitStatus.flatMap(RoutePoint.PointVisitStatus.init(rawValue:))
+            .map { status in
+                RoutePoint.Visit(
+                    status: status,
+                    visitedAt: visitedAt.map { Date(timeIntervalSince1970: $0) },
+                    expectedAt: expectedVisitAt.map { Date(timeIntervalSince1970: $0) })
+            }
         return RoutePoint(
             latitude: row["latitude"], longitude: row["longitude"],
             address: row["address"], addressParts: parts,
@@ -507,7 +523,8 @@ public nonisolated final class AppDatabase: Sendable {
             contactGivenName: row["contactGivenName"],
             contactFamilyName: row["contactFamilyName"],
             contactPhone: row["contactPhone"],
-            contactPhoneExtension: row["contactPhoneExtension"])
+            contactPhoneExtension: row["contactPhoneExtension"],
+            visit: visit)
     }
 
     // MARK: - Saved places

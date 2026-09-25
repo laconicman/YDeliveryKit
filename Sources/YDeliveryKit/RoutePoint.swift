@@ -32,6 +32,43 @@ public nonisolated struct RoutePoint: Codable, Hashable, Sendable {
     /// Dialled after the phone connects — its own field, never folded into the number.
     public var contactPhoneExtension: String?
 
+    /// Provider-reported progress at this stop — the courier's own account of
+    /// arrival and handover. Boxed, not spread across fields: the point's
+    /// sender-authored surface (where, who, which door) stays distinct from
+    /// what the provider observed there, and a draft's point simply has none.
+    /// Stamped data — merges arrive only through provider-sighted writes, and
+    /// rows written before the field decode with it absent.
+    public var visit: Visit?
+
+    /// The wire's four per-point visit states (`visit_status`), mirrored
+    /// verbatim: `pending` is unvisited, `arrived` the courier at the door,
+    /// `visited` the handover done, `skipped` the stop the courier passed by.
+    public nonisolated enum PointVisitStatus: String, Codable, Hashable, Sendable {
+        case pending
+        case arrived
+        case visited
+        case skipped
+    }
+
+    /// One stop's provider visit record — `visitedAt` is the handover's actual
+    /// stamp (visited points only), `expectedAt` the provider's own estimate
+    /// while the stop still waits. The wire's `visit_order` is not carried:
+    /// the route's array order already *is* the visit order, and a second
+    /// source could only disagree with it.
+    public nonisolated struct Visit: Codable, Hashable, Sendable {
+        public var status: PointVisitStatus
+        public var visitedAt: Date?
+        public var expectedAt: Date?
+
+        public init(status: PointVisitStatus,
+                    visitedAt: Date? = nil,
+                    expectedAt: Date? = nil) {
+            self.status = status
+            self.visitedAt = visitedAt
+            self.expectedAt = expectedAt
+        }
+    }
+
     public init(
         latitude: Double,
         longitude: Double,
@@ -41,7 +78,8 @@ public nonisolated struct RoutePoint: Codable, Hashable, Sendable {
         contactGivenName: String? = nil,
         contactFamilyName: String? = nil,
         contactPhone: String? = nil,
-        contactPhoneExtension: String? = nil
+        contactPhoneExtension: String? = nil,
+        visit: Visit? = nil
     ) {
         self.latitude = latitude
         self.longitude = longitude
@@ -52,6 +90,7 @@ public nonisolated struct RoutePoint: Codable, Hashable, Sendable {
         self.contactFamilyName = contactFamilyName
         self.contactPhone = contactPhone
         self.contactPhoneExtension = contactPhoneExtension
+        self.visit = visit
     }
 }
 
