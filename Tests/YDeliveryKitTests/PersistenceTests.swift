@@ -246,6 +246,69 @@ struct PersistenceTests {
         #expect(stored.route[1].address == "Невский, 100")
     }
 
+    /// YD-15's discharge: the role rides the point now — a return leg persists
+    /// as `"return"` in `routeStops` instead of flattening to `dropoff`.
+    @Test("A carried stop role round-trips — the return leg keeps its name")
+    func stopRolesRoundTrip() throws {
+        let database = makeDatabase()
+        var pickup = RoutePoint(latitude: 55, longitude: 37, address: "Склад")
+        pickup.role = .pickup
+        var dropoff = RoutePoint(latitude: 56, longitude: 38, address: "Тверская, 6")
+        dropoff.role = .dropoff
+        var returnLeg = RoutePoint(latitude: 55, longitude: 37, address: "Склад")
+        returnLeg.role = .return
+        let order = Order(created: .now, status: .done,
+                          route: [pickup, dropoff, returnLeg], claimID: "claim-77")
+
+        try database.recordOrder(order)
+        let stored = try #require(database.readOrders().first)
+
+        #expect(stored.route.map(\.role) == [.pickup, .dropoff, .return])
+        let spellings = try database.queue.read {
+            try String.fetchAll($0, sql: """
+                SELECT "role" FROM "routeStops" ORDER BY "position"
+                """)
+        }
+        #expect(spellings == ["pickup", "dropoff", "return"])
+    }
+
+    /// Rows written before roles existed keep their honesty: the write side
+    /// fills what position would say (first `pickup`, rest `dropoff`), and an
+    /// unrecognised spelling reads back as roleless rather than dropping the
+    /// stop — `RouteLine` then derives the mark by position, the old contract.
+    @Test("A roleless write fills positionally; an unknown spelling reads roleless")
+    func rolelessAndUnknownSpellings() throws {
+        let database = makeDatabase()
+        let order = Order(
+            created: .now, status: .done,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А"),
+                    RoutePoint(latitude: 56, longitude: 38, address: "Б")],
+            claimID: "claim-78")
+
+        try database.recordOrder(order)
+        let stored = try #require(database.readOrders().first)
+        #expect(stored.route.map(\.role) == [.pickup, .dropoff],
+                "position fills a roleless write — the pre-role contract")
+
+        try database.queue.write { db in
+            try db.execute(sql: """
+                INSERT INTO "routeStops"
+                  ("id", "orderID", "position", "role", "latitude", "longitude",
+                   "address")
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, arguments: [
+                    UUID().uuidString.lowercased(),
+                    order.id.uuidString.lowercased(), 2, "teleport",
+                    59.0, 30.0, "В"])
+        }
+        let reread = try #require(database.readOrders().first)
+        #expect(reread.route.count == 3)
+        #expect(reread.route[2].role == nil)
+        #expect(RouteLine.stops(from: reread.route).map(\.role)
+                == [.start, .stop(number: 2), .end],
+                "position derives the mark a strange spelling cannot")
+    }
+
     @Test("A re-recorded order keeps one row and one set of stops")
     func recordIsIdempotent() throws {
         let database = makeDatabase()

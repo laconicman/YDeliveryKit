@@ -539,7 +539,7 @@ public nonisolated final class AppDatabase: Sendable {
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, arguments: Self.args([
                     id, order.id, index,
-                    index == 0 ? "pickup" : "dropoff",
+                    point.role?.rawValue ?? (index == 0 ? "pickup" : "dropoff"),
                     point.latitude, point.longitude, point.address,
                     point.addressParts?.building,
                     point.addressParts?.entrance,
@@ -583,10 +583,14 @@ public nonisolated final class AppDatabase: Sendable {
             contactPhoneExtension: row["contactPhoneExtension"])
     }
 
-    /// A `routeStops` row: the shared point columns plus the provider's visit
-    /// record, which only this table carries.
+    /// A `routeStops` row: the shared point columns plus the route role and the
+    /// provider's visit record, which only this table carries. An unknown
+    /// spelling reads as roleless rather than dropping the stop — position then
+    /// derives the mark, the convention older rows were written under.
     private static func routeStop(_ row: Row) -> RoutePoint {
         var point = routePoint(row)
+        let role: String? = row["role"]
+        point.role = role.flatMap(RoutePoint.Role.init(rawValue:))
         // REAL epoch columns, optional: annotate so the subscript decodes NULL
         // rather than binding Value to non-optional Double and trapping (PR #9).
         let visitedAt: Double? = row["visitedAt"]

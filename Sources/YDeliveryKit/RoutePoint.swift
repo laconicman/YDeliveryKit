@@ -40,6 +40,24 @@ public nonisolated struct RoutePoint: Codable, Hashable, Sendable {
     /// rows written before the field decode with it absent.
     public var visit: Visit?
 
+    /// What happens at this stop — pickup, handover, or the courier's return leg.
+    /// Optional because a point is not always riding a route: saved places and
+    /// recents are roleless, and rows written before the field decode with it
+    /// absent (the reader then falls back to position, the pre-role convention).
+    /// Deliberately out of ``destinationKey``: a place's function is context,
+    /// not identity — «Тверская 6» as a drop-off and as a return are one memory.
+    public var role: Role?
+
+    /// The route's role vocabulary — the same spelling `routeStops.role` has
+    /// always written and the wire's `point.type` speaks one-to-one
+    /// (`source`/`destination`/`return`). Backticked `return` reads `\.return`
+    /// at use sites, like the draft model's own `Role`.
+    public nonisolated enum Role: String, Codable, Hashable, Sendable {
+        case pickup
+        case dropoff
+        case `return`
+    }
+
     /// The wire's four per-point visit states (`visit_status`), mirrored
     /// verbatim: `pending` is unvisited, `arrived` the courier at the door,
     /// `visited` the handover done, `skipped` the stop the courier passed by.
@@ -79,7 +97,8 @@ public nonisolated struct RoutePoint: Codable, Hashable, Sendable {
         contactFamilyName: String? = nil,
         contactPhone: String? = nil,
         contactPhoneExtension: String? = nil,
-        visit: Visit? = nil
+        visit: Visit? = nil,
+        role: Role? = nil
     ) {
         self.latitude = latitude
         self.longitude = longitude
@@ -91,6 +110,7 @@ public nonisolated struct RoutePoint: Codable, Hashable, Sendable {
         self.contactPhone = contactPhone
         self.contactPhoneExtension = contactPhoneExtension
         self.visit = visit
+        self.role = role
     }
 }
 

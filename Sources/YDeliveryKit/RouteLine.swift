@@ -36,26 +36,44 @@ public struct RouteLine: View {
         self.selection = selection
     }
 
-    /// A stored route, mapped: position derives the mark — first the ring, last the
-    /// teardrop, middles their number (the `2c` mapping) — and the point's contact
-    /// summary rides the subtitle. A stored route carries no role column yet
-    /// (YDelivery TechDebt YD-15), so position is the honest source.
+    /// A stored route, mapped: the point's carried role names the mark where a
+    /// route-stop row has one (YD-15's discharge — `routeStops.role` is real
+    /// now), and position still derives it where the row is roleless — the ring
+    /// first, the teardrop last, middles numbered (the `2c` mapping). The
+    /// point's contact summary rides the subtitle either way.
     public init(points: [RoutePoint], selection: Binding<Int?>? = nil) {
         self.init(stops: Self.stops(from: points), selection: selection)
     }
 
-    /// The `2c` mapping as data, so it is testable without rendering: ends are
-    /// symbols, everything between is numbered by position. `nonisolated` — pure
-    /// value mapping must not trap off the main actor (Swift Testing's pool).
+    /// The `2c` mapping as data, so it is testable without rendering: a carried
+    /// role speaks first — pickup the ring, return the return mark, drop-off the
+    /// teardrop at the end and a number between — and a roleless point falls
+    /// back to position. `nonisolated` — pure value mapping must not trap off
+    /// the main actor (Swift Testing's pool).
     public nonisolated static func stops(from points: [RoutePoint]) -> [Stop] {
         points.enumerated().map { index, point in
             Stop(
-                role: index == 0
-                    ? .start
-                    : index == points.count - 1 ? .end : .stop(number: index + 1),
+                role: point.role.map {
+                    Self.badgeRole(of: $0, at: index, count: points.count)
+                } ?? (index == 0
+                      ? .start
+                      : index == points.count - 1 ? .end : .stop(number: index + 1)),
                 title: point.address,
                 subtitle: point.contactSummary
             )
+        }
+    }
+
+    /// A carried role to its mark: the origin ring for a pickup, the return
+    /// mark for the courier's leg back, and a drop-off — the only role that can
+    /// repeat mid-route — is the teardrop at the route's end, numbered between.
+    private nonisolated static func badgeRole(
+        of role: RoutePoint.Role, at index: Int, count: Int
+    ) -> PointBadge.Role {
+        switch role {
+        case .pickup: .start
+        case .return: .returnPoint
+        case .dropoff: index == count - 1 ? .end : .stop(number: index + 1)
         }
     }
 

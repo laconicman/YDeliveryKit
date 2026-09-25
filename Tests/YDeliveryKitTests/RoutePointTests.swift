@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import YDeliveryKit
 
@@ -42,5 +43,35 @@ struct CompactAddressTests {
             latitude: 0, longitude: 0,
             address: "1-й проезд, Каширское шоссе, 52")
         #expect(point.compactAddress == "1-й проезд, Каширское шоссе, 52")
+    }
+}
+
+@Suite("RoutePoint.destinationKey")
+struct DestinationKeyTests {
+    /// A place's function is context, not identity: the warehouse as a pickup
+    /// and as the return leg is one memory — recents and saved places must not
+    /// fork on it (YD-15). The door details already distinguish destinations;
+    /// the role must not.
+    @Test("Role is outside the key — one place, one memory")
+    func roleIsOutsideTheKey() {
+        var dropoff = RoutePoint(latitude: 55.75, longitude: 37.61,
+                                 address: "Тверская, 6")
+        dropoff.role = .dropoff
+        var returnLeg = dropoff
+        returnLeg.role = .return
+        var roleless = dropoff
+        roleless.role = nil
+        #expect(dropoff.destinationKey == returnLeg.destinationKey)
+        #expect(dropoff.destinationKey == roleless.destinationKey)
+    }
+
+    /// Rows written before the field decode with it absent — the additive
+    /// Optional contract that keeps old Codable blobs and hand-built fixtures
+    /// intact.
+    @Test("A pre-role blob decodes roleless")
+    func preRoleBlobDecodes() throws {
+        let json = #"{"latitude":55,"longitude":37,"address":"А"}"#
+        let point = try JSONDecoder().decode(RoutePoint.self, from: Data(json.utf8))
+        #expect(point.role == nil)
     }
 }
