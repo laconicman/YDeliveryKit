@@ -67,7 +67,7 @@ public nonisolated struct Order: Codable, Hashable, Identifiable, Sendable {
     /// pre-role data. The pickup end needs no accessor: the route's first
     /// stop is it, by the same invariant the draft enforces.
     public var destinationPoint: RoutePoint? {
-        route.last { $0.role != .return }
+        route.destinationIndex.map { route[$0] }
     }
 
     public init(
@@ -98,5 +98,14 @@ public nonisolated struct Order: Codable, Hashable, Identifiable, Sendable {
         self.etaMinutes = etaMinutes
         self.providerStatus = providerStatus
         self.providerObservedAt = providerObservedAt
+    }
+}
+
+nonisolated extension Array where Element == RoutePoint {
+    /// The index ``Order/destinationPoint`` resolves to, for a caller holding
+    /// the bare route — the last drop-off, so a return leg riding last is
+    /// never mistaken for the parcel's destination.
+    public var destinationIndex: Int? {
+        lastIndex { $0.role != .return }
     }
 }
