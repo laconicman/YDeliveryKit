@@ -88,9 +88,17 @@ extension AppDatabase {
 
     /// The scene-delegate handoff — a tapped share URL arrives as
     /// `CKShare.Metadata`, the engine accepts it and fetches the shared zone.
-    /// Needs no prior start: the accept itself is the CloudKit call; a running
-    /// engine merely hastens the fetch of what was just accepted.
+    ///
+    /// The fetch is repeated here deliberately: the engine's own post-accept
+    /// fetch goes through `syncEngines.shared`, which is `nil` until `start()`
+    /// completes — a cold launch on a share URL races exactly that, and the
+    /// accept would land server-side while the records wait for the next
+    /// scheduled pull. `fetchChanges` awaits the engine's `startTask` first, so
+    /// calling it always is safe when start is mid-flight; when the engine's
+    /// own fetch already ran, this is one bounded extra pass over the same
+    /// zones — cheap next to the accept the tap just paid for.
     public func acceptShare(metadata: CKShare.Metadata) async throws {
         try await syncEngine.acceptShare(metadata: metadata)
+        try await syncEngine.fetchChanges()
     }
 }
