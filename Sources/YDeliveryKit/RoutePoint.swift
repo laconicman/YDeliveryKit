@@ -155,7 +155,8 @@ nonisolated extension RoutePoint {
     public var destinationKey: String {
         let address = address.lowercased().trimmingCharacters(in: .whitespaces)
         let parts = addressParts.map {
-            "\($0.entrance)|\($0.floor)|\($0.apartment)|\($0.intercom)".lowercased()
+            "\($0.building)|\($0.entrance)|\($0.floor)|\($0.apartment)|\($0.intercom)"
+                .lowercased()
         } ?? ""
         // Five decimals is about a metre — enough to separate two entrances of one
         // building, coarse enough that the same pin re-read stays one memory.

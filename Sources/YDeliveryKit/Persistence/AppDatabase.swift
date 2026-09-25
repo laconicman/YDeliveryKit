@@ -532,15 +532,16 @@ public nonisolated final class AppDatabase: Sendable {
                 INSERT OR \(upsert ? "REPLACE" : "IGNORE") INTO "routeStops"
                   ("id", "orderID", "position", "role",
                    "latitude", "longitude", "address",
-                   "entrance", "floor", "apartment", "intercom",
+                   "building", "entrance", "floor", "apartment", "intercom",
                    "contactName", "contactGivenName", "contactFamilyName",
                    "contactPhone", "contactPhoneExtension",
                    "visitStatus", "visitedAt", "expectedVisitAt")
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, arguments: Self.args([
                     id, order.id, index,
                     index == 0 ? "pickup" : "dropoff",
                     point.latitude, point.longitude, point.address,
+                    point.addressParts?.building,
                     point.addressParts?.entrance,
                     point.addressParts?.floor,
                     point.addressParts?.apartment,
@@ -561,14 +562,16 @@ public nonisolated final class AppDatabase: Sendable {
     /// `savedPlaces` alike. Provider columns stay out: a saved place has no
     /// courier, so this reader never touches a column a caller's schema lacks.
     private static func routePoint(_ row: Row) -> RoutePoint {
+        let building: String? = row["building"]
         let entrance: String? = row["entrance"]
         let floor: String? = row["floor"]
         let apartment: String? = row["apartment"]
         let intercom: String? = row["intercom"]
-        let parts: AddressParts? = [entrance, floor, apartment, intercom].allSatisfy({ $0 == nil })
+        let parts: AddressParts? = [building, entrance, floor, apartment, intercom]
+            .allSatisfy({ $0 == nil })
             ? nil
             : AddressParts(
-                entrance: entrance ?? "", floor: floor ?? "",
+                building: building ?? "", entrance: entrance ?? "", floor: floor ?? "",
                 apartment: apartment ?? "", intercom: intercom ?? "")
         return RoutePoint(
             latitude: row["latitude"], longitude: row["longitude"],
@@ -648,13 +651,14 @@ public nonisolated final class AppDatabase: Sendable {
                 INSERT OR REPLACE INTO "savedPlaces"
                   ("id", "name", "kind",
                    "latitude", "longitude", "address",
-                   "entrance", "floor", "apartment", "intercom",
+                   "building", "entrance", "floor", "apartment", "intercom",
                    "contactName", "contactGivenName", "contactFamilyName",
                    "contactPhone", "contactPhoneExtension")
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, arguments: Self.args([
                     place.id, place.name, place.kind.rawValue,
                     p.latitude, p.longitude, p.address,
+                    p.addressParts?.building,
                     p.addressParts?.entrance,
                     p.addressParts?.floor,
                     p.addressParts?.apartment,
@@ -1145,13 +1149,14 @@ public nonisolated final class AppDatabase: Sendable {
                     INSERT INTO "draftStops"
                       ("id", "draftID", "position", "role",
                        "latitude", "longitude", "address",
-                       "entrance", "floor", "apartment", "intercom",
+                       "building", "entrance", "floor", "apartment", "intercom",
                        "contactName", "contactGivenName", "contactFamilyName",
                        "contactPhone", "contactPhoneExtension")
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, arguments: Self.args([
                         stop.id, draft.id, position, stop.role,
                         point?.latitude, point?.longitude, point?.address,
+                        point?.addressParts?.building,
                         point?.addressParts?.entrance, point?.addressParts?.floor,
                         point?.addressParts?.apartment, point?.addressParts?.intercom,
                         point?.contactName, point?.contactGivenName,
@@ -1283,14 +1288,16 @@ public nonisolated final class AppDatabase: Sendable {
               let longitude: Double = try columnIfPresent("longitude", in: row),
               let address: String = try columnIfPresent("address", in: row)
         else { return nil }
+        let building: String? = try columnIfPresent("building", in: row)
         let entrance: String? = try columnIfPresent("entrance", in: row)
         let floor: String? = try columnIfPresent("floor", in: row)
         let apartment: String? = try columnIfPresent("apartment", in: row)
         let intercom: String? = try columnIfPresent("intercom", in: row)
-        let parts: AddressParts? = [entrance, floor, apartment, intercom].allSatisfy({ $0 == nil })
+        let parts: AddressParts? = [building, entrance, floor, apartment, intercom]
+            .allSatisfy({ $0 == nil })
             ? nil
             : AddressParts(
-                entrance: entrance ?? "", floor: floor ?? "",
+                building: building ?? "", entrance: entrance ?? "", floor: floor ?? "",
                 apartment: apartment ?? "", intercom: intercom ?? "")
         return RoutePoint(
             latitude: latitude, longitude: longitude,

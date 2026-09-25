@@ -106,8 +106,32 @@ struct SharedAddressTests {
         #expect(parts.intercom == "77")
     }
 
+    @Test("«Корпус» fills the building field; «дом» stays out — it names the house")
+    func buildingLabelsSplit() {
+        let parts = SharedAddress.doorParts(
+            in: "Тверская, 6, корпус 2, подъезд 1")
+        #expect(parts.building == "2")
+        #expect(parts.entrance == "1")
+
+        let house = SharedAddress.doorParts(in: "дом 15, квартира 3")
+        #expect(house.building.isEmpty,
+                "«дом» is the house number — the address's own job, not `building`'s (YD-10)")
+        #expect(house.apartment == "3")
+    }
+
     @Test("A message with no door words yields no parts")
     func noDoorWords() {
         #expect(SharedAddress.doorParts(in: "Каширское шоссе, 52").isEmpty)
+    }
+
+    @Test("Parts written before `building` decode with it absent")
+    func buildingDecodesAbsent() throws {
+        let parts = try JSONDecoder().decode(
+            AddressParts.self,
+            from: #"{"entrance":"2","floor":"3","apartment":"15","intercom":"77"}"#
+                .data(using: .utf8)!)
+        #expect(parts.entrance == "2")
+        #expect(parts.building.isEmpty)
+        #expect(!parts.isEmpty)
     }
 }

@@ -38,6 +38,7 @@ nonisolated extension AppDatabase {
           "position" INTEGER NOT NULL, "role" TEXT NOT NULL,
           "latitude" REAL NOT NULL, "longitude" REAL NOT NULL,
           "address" TEXT NOT NULL,
+          "building" TEXT,
           "entrance" TEXT, "floor" TEXT, "apartment" TEXT, "intercom" TEXT,
           "contactName" TEXT, "contactGivenName" TEXT, "contactFamilyName" TEXT,
           "contactPhone" TEXT, "contactPhoneExtension" TEXT,
@@ -102,6 +103,7 @@ nonisolated extension AppDatabase {
           "name" TEXT NOT NULL, "kind" TEXT NOT NULL,
           "latitude" REAL NOT NULL, "longitude" REAL NOT NULL,
           "address" TEXT NOT NULL,
+          "building" TEXT,
           "entrance" TEXT, "floor" TEXT, "apartment" TEXT, "intercom" TEXT,
           "contactName" TEXT, "contactGivenName" TEXT, "contactFamilyName" TEXT,
           "contactPhone" TEXT, "contactPhoneExtension" TEXT
@@ -143,6 +145,7 @@ nonisolated extension AppDatabase {
             REFERENCES "\(OrderDraftRow.tableName)"("id") ON DELETE CASCADE,
           "position" INTEGER NOT NULL, "role" TEXT NOT NULL,
           "latitude" REAL, "longitude" REAL, "address" TEXT,
+          "building" TEXT,
           "entrance" TEXT, "floor" TEXT, "apartment" TEXT, "intercom" TEXT,
           "contactName" TEXT, "contactGivenName" TEXT, "contactFamilyName" TEXT,
           "contactPhone" TEXT, "contactPhoneExtension" TEXT
@@ -215,5 +218,10 @@ nonisolated extension AppDatabase {
         (DraftItemRow.tableName, "sizeHeightCm", "REAL", nil),
         (DraftItemRow.tableName, "pickupStopRef", "TEXT", nil),
         (DraftItemRow.tableName, "dropoffStopRef", "TEXT", nil),
+        // YD-10 — the wire's `building` (строение/корпус) lands on every
+        // point-bearing table.
+        (RouteStopRow.tableName, "building", "TEXT", nil),
+        (SavedPlaceRow.tableName, "building", "TEXT", nil),
+        (DraftStopRow.tableName, "building", "TEXT", nil),
     ]
 }

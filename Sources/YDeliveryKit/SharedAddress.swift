@@ -80,6 +80,7 @@ public nonisolated enum SharedAddress {
             let value = words[index + 1]
             guard !value.isEmpty else { continue }
             switch field {
+            case .building where parts.building.isEmpty: parts.building = value
             case .entrance where parts.entrance.isEmpty: parts.entrance = value
             case .floor where parts.floor.isEmpty: parts.floor = value
             case .apartment where parts.apartment.isEmpty: parts.apartment = value
@@ -96,10 +97,18 @@ public nonisolated enum SharedAddress {
     /// fields here rather than shared, because the two questions differ:
     /// that one asks *what a number is*, this one *where a detail goes*.
     private enum Field {
-        case entrance, floor, apartment, intercom
+        case building, entrance, floor, apartment, intercom
 
         init?(label: String) {
             switch label.lowercased() {
+            // «дом»/«д.»/«владение» stay out: they name the house number itself,
+            // which lives in the address — `building` is the строение/корпус
+            // sub-designation, the wire's own slot (YD-10). Bare «к» stays out
+            // for the same reason `PickedPlace.buildingLabels` excludes it —
+            // it is the preposition *to* as often as корпус.
+            case "корпус", "корп.", "корп", "строение", "стр.", "стр", "к.",
+                 "building", "bldg", "bldg.":
+                self = .building
             case "подъезд", "под.", "под", "парадная", "entrance":
                 self = .entrance
             case "этаж", "эт.", "эт", "floor":

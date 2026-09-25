@@ -225,7 +225,7 @@ struct PersistenceTests {
         var point = RoutePoint(
             latitude: 55.75, longitude: 37.61, address: "Тверская, 6",
             contactName: "Иван Петров", contactPhone: "+79123456789")
-        point.addressParts = AddressParts(entrance: "2", apartment: "12")
+        point.addressParts = AddressParts(building: "3", entrance: "2", apartment: "12")
         let order = Order(
             created: .now, status: .active,
             route: [point, RoutePoint(latitude: 59, longitude: 30, address: "Невский, 100")],
@@ -240,6 +240,8 @@ struct PersistenceTests {
         #expect(stored.price == "850.00")
         #expect(stored.route.count == 2)
         #expect(stored.route[0].addressParts?.apartment == "12")
+        #expect(stored.route[0].addressParts?.building == "3",
+                "the wire's `building` slot parks on the same row (YD-10)")
         #expect(stored.route[0].contactPhone == "+79123456789")
         #expect(stored.route[1].address == "Невский, 100")
     }
@@ -541,6 +543,8 @@ struct PersistenceTests {
                 && columns.contains("visitedAt")
                 && columns.contains("expectedVisitAt"),
                 "the three visit columns all arrived")
+        #expect(columns.contains("building"),
+                "the door-details set grew the корпус column (YD-10)")
 
         let stored = try #require(database.readOrders().first)
         #expect(stored.route.first?.address == "Москворечье, 6",

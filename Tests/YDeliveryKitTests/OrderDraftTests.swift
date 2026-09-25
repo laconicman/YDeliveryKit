@@ -32,7 +32,7 @@ struct OrderDraftTests {
             point: RoutePoint(
                 latitude: 55.7558, longitude: 37.6173,
                 address: "Москва, Тверская 1",
-                addressParts: AddressParts(entrance: "2", floor: "", apartment: "15", intercom: "77"),
+                addressParts: AddressParts(building: "5", entrance: "2", floor: "", apartment: "15", intercom: "77"),
                 contactName: "Иван Петров", contactGivenName: "Иван",
                 contactFamilyName: "Петров", contactPhone: "+79123456789",
                 contactPhoneExtension: "12"))
@@ -88,6 +88,8 @@ struct OrderDraftTests {
         #expect(first.latitude == 55.7558)
         #expect(first.address == "Москва, Тверская 1")
         #expect(first.addressParts?.entrance == "2")
+        #expect(first.addressParts?.building == "5",
+                "строение/корпус rides the draft's parts columns too (YD-10)")
         #expect(first.contactGivenName == "Иван")
         #expect(first.contactPhoneExtension == "12")
         #expect(restored.stops[2].point == nil)
