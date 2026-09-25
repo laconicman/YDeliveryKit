@@ -865,6 +865,82 @@ struct PersistenceTests {
                 "a wiped state reads fresh — the next token inherits nothing")
     }
 
+    // MARK: Pending acceptances — YD-5's durable half
+
+    @Test("A lost acceptance is noted, drained, and resolved into its order")
+    func pendingAcceptanceLifecycle() throws {
+        let database = makeDatabase()
+        #expect(database.pendingAcceptances().isEmpty,
+                "no attempts yet — the table starts empty")
+
+        try database.noteUnresolvedAcceptance(claimID: "claim-lost")
+        let pending = try #require(database.pendingAcceptances().first)
+        #expect(pending.claimID == "claim-lost")
+        #expect(pending.createdAt <= Date.now)
+
+        let orderID = UUID()
+        try database.markPendingAcceptance("claim-lost", as: .resolved, orderID: orderID)
+        #expect(database.pendingAcceptances().isEmpty,
+                "resolved leaves the drain — the row stays as audit")
+
+        let audit = try #require(database.queue.read {
+            try Row.fetchOne($0, sql: """
+                SELECT "state", "orderRef", "lastCheckedAt" FROM "pendingAcceptances"
+                """)
+        })
+        #expect((audit["state"] as String?) == "resolved")
+        #expect((audit["orderRef"] as UUID?) == orderID)
+        #expect(audit["lastCheckedAt"] != nil,
+                "the check is stamped — when it resolved is part of the record")
+    }
+
+    @Test("Noting the same claim twice is one row, re-pended")
+    func pendingAcceptanceIsIdempotent() throws {
+        let database = makeDatabase()
+        try database.noteUnresolvedAcceptance(claimID: "claim-lost")
+        try database.markPendingAcceptance("claim-lost", as: .resolved, orderID: UUID())
+        try database.noteUnresolvedAcceptance(claimID: "claim-lost")
+
+        let rows = database.pendingAcceptances()
+        #expect(rows.count == 1, "the derived key absorbs the second note")
+        #expect(rows.first?.claimID == "claim-lost")
+        let orderRef: UUID? = try database.queue.read {
+            try Row.fetchOne($0, sql: """
+                SELECT "orderRef" FROM "pendingAcceptances"
+                """).flatMap { $0["orderRef"] }
+        }
+        #expect(orderRef == nil,
+                "a re-pended row forgets the stale resolution's link")
+    }
+
+    @Test("A checked row keeps polling; a lapsed one leaves the drain")
+    func pendingAcceptanceCheckedAndLapsed() throws {
+        let database = makeDatabase()
+        try database.noteUnresolvedAcceptance(claimID: "claim-a")
+        try database.noteUnresolvedAcceptance(claimID: "claim-b")
+
+        try database.markPendingAcceptance("claim-a", as: .checked)
+        try database.markPendingAcceptance("claim-b", as: .lapsed)
+
+        #expect(database.pendingAcceptances().map(\.claimID) == ["claim-a"],
+                "lapsed stops asking — the audit row outlives the poll")
+        let lapsedState: String? = try database.queue.read {
+            try Row.fetchOne($0, sql: """
+                SELECT "state" FROM "pendingAcceptances" WHERE "claimID" = 'claim-b'
+                """).map { $0["state"] }
+        }
+        #expect(lapsedState == "lapsed")
+    }
+
+    @Test("The identity boundary wipes pending acceptances with the rest")
+    func pendingAcceptanceClearsAtIdentity() throws {
+        let database = makeDatabase()
+        try database.noteUnresolvedAcceptance(claimID: "claim-lost")
+        try database.clearSyncState()
+        #expect(database.pendingAcceptances().isEmpty,
+                "the next credential never inherits this account's owed answer")
+    }
+
     // MARK: Migration — the JSON stores into tables
 
     private func write(_ data: Data, named name: String) throws {

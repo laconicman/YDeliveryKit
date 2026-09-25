@@ -970,6 +970,98 @@ public nonisolated final class AppDatabase: Sendable {
             try db.execute(
                 sql: "DELETE FROM \"pendingDiscoveries\" WHERE \"providerAccountRef\" = ?",
                 arguments: Self.args([providerAccountRef]))
+            try db.execute(
+                sql: "DELETE FROM \"pendingAcceptances\" WHERE \"providerAccountRef\" = ?",
+                arguments: Self.args([providerAccountRef]))
+        }
+    }
+
+    // MARK: - Pending acceptances (device tier) — YD-5's durable half
+
+    /// What a drain can still do with a pending row.
+    public nonisolated enum PendingAcceptanceOutcome {
+        /// The card answered nothing yet — stay pending, stamp the check.
+        case checked
+        /// The claim materialized — link the order it became.
+        case resolved
+        /// The claim provably never materialized within the drain's window —
+        /// stop asking, keep the audit row.
+        case lapsed
+    }
+
+    /// A claim this device accepted and never saw the answer to — the durable half
+    /// of the ordering flow's `unresolved` state. Only `state = 'pending'` rows
+    /// with a claim id surface here; a `nil`-claimID row (a create whose answer
+    /// was lost before the id was known) is audit-only — nothing can fetch it.
+    public nonisolated struct PendingAcceptance: Hashable, Sendable {
+        public let claimID: String
+        /// When the loss was recorded — the drain's staleness measure.
+        public let createdAt: Date
+    }
+
+    /// Acceptance attempted, answer lost — remembered so a force-quit cannot
+    /// forget a claim that may be spending money (YD-5). Idempotent on
+    /// `account ‖ claimID`: noting the same lost answer twice is one row, and a
+    /// re-noted row re-pends — the latest attempt is the one still owed.
+    public func noteUnresolvedAcceptance(claimID: String) throws {
+        try queue.write { db in
+            try db.execute(sql: """
+                INSERT INTO "pendingAcceptances"
+                  ("id", "providerAccountRef", "claimID", "createdAt", "state")
+                VALUES (?, ?, ?, ?, 'pending')
+                ON CONFLICT("id") DO UPDATE SET
+                  "state" = 'pending', "orderRef" = NULL, "lastCheckedAt" = NULL
+                """, arguments: Self.args([
+                    UUID.derived(
+                        namespace: UUID.DerivedNamespace.pendingAcceptance,
+                        providerAccountRef, claimID),
+                    providerAccountRef, claimID,
+                    Date.now.timeIntervalSince1970,
+                ]))
+        }
+    }
+
+    /// The pending rows, oldest first — absent and unreadable both read as empty,
+    /// same recovery posture as ``readSyncState``.
+    public func pendingAcceptances() -> [PendingAcceptance] {
+        guard let rows = try? queue.read({ db in
+            try Row.fetchAll(db, sql: """
+                SELECT "claimID", "createdAt" FROM "pendingAcceptances"
+                WHERE "providerAccountRef" = ? AND "state" = 'pending'
+                  AND "claimID" IS NOT NULL
+                ORDER BY "createdAt"
+                """, arguments: Self.args([providerAccountRef]))
+        }) else { return [] }
+        return rows.map {
+            PendingAcceptance(
+                claimID: $0["claimID"],
+                createdAt: Date(timeIntervalSince1970: $0["createdAt"]))
+        }
+    }
+
+    /// The drain's bookkeeping for one pending row. `resolved` and `lapsed` are
+    /// terminal for the poll — the row itself stays: this table is the audit of
+    /// "we POSTed and never saw the answer", and a deleted row is a forgotten
+    /// attempt, not a resolved one.
+    public func markPendingAcceptance(
+        _ claimID: String, as outcome: PendingAcceptanceOutcome, orderID: UUID? = nil
+    ) throws {
+        let state = switch outcome {
+        case .checked: "pending"
+        case .resolved: "resolved"
+        case .lapsed: "lapsed"
+        }
+        try queue.write { db in
+            try db.execute(sql: """
+                UPDATE "pendingAcceptances" SET
+                  "state" = ?,
+                  "orderRef" = COALESCE(?, "orderRef"),
+                  "lastCheckedAt" = ?
+                WHERE "providerAccountRef" = ? AND "claimID" = ?
+                """, arguments: Self.args([
+                    state, orderID, Date.now.timeIntervalSince1970,
+                    providerAccountRef, claimID,
+                ]))
         }
     }
 }
