@@ -31,7 +31,7 @@ struct RouteLineTests {
         #expect(stops[1].subtitle == nil)
     }
 
-    @Test("A carried role names the mark — the return leg is not a numbered stop")
+    @Test("A carried role names the mark — the return leg is not the destination")
     func carriedRoleWins() {
         var returnLeg = point("Склад")
         returnLeg.role = .return
@@ -40,7 +40,9 @@ struct RouteLineTests {
         var dropoff = point("Б")
         dropoff.role = .dropoff
         let stops = RouteLine.stops(from: [pickup, dropoff, returnLeg])
-        #expect(stops.map(\.role) == [.start, .stop(number: 2), .returnPoint])
+        // The teardrop stays where the parcel lands: the return mark rides
+        // last, and the delivery's end is the drop-off before it.
+        #expect(stops.map(\.role) == [.start, .end, .returnPoint])
     }
 
     @Test("A carried drop-off at the end is still the teardrop")
