@@ -129,4 +129,23 @@ struct DeliverySnapshotTests {
                 .contains("москва, каширское шоссе, 52") == true,
                 "the dedup key keeps the full address the label sheds")
     }
+
+    /// The destination is the last *drop-off*, not the last stop — a return
+    /// leg rides last on the route but is the way back, and the widget must
+    /// never name the warehouse as where the parcel is going.
+    @Test("A return-legged order's destination is still its drop-off")
+    func returnLegKeepsDestination() {
+        var pickup = RoutePoint(latitude: 0, longitude: 0, address: "Склад")
+        pickup.role = .pickup
+        var dropoff = RoutePoint(latitude: 0, longitude: 0, address: "Тверская, 6")
+        dropoff.role = .dropoff
+        var returnLeg = RoutePoint(latitude: 0, longitude: 0, address: "Склад")
+        returnLeg.role = .return
+        let order = Order(created: .now, status: .active,
+                          route: [pickup, dropoff, returnLeg])
+
+        #expect(order.destinationPoint?.address == "Тверская, 6")
+        #expect(DeliverySnapshot.Entry(order: order, orderNumber: nil)
+            .destinationAddress == "Тверская, 6")
+    }
 }

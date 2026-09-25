@@ -60,6 +60,16 @@ public nonisolated struct Order: Codable, Hashable, Identifiable, Sendable {
         return providerObservedAt.addingTimeInterval(TimeInterval(etaMinutes) * 60)
     }
 
+    /// The parcel's destination — the last drop-off, not the last stop: a
+    /// return leg rides last on the route but is the way *back*, not the
+    /// delivery (YD-15). Roleless points — written before roles rode the
+    /// store — count as drop-offs, so `route.last` remains the answer for
+    /// pre-role data. The pickup end needs no accessor: the route's first
+    /// stop is it, by the same invariant the draft enforces.
+    public var destinationPoint: RoutePoint? {
+        route.last { $0.role != .return }
+    }
+
     public init(
         id: UUID = UUID(),
         created: Date,
