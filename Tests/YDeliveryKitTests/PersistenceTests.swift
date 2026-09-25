@@ -1,3 +1,4 @@
+import CloudKit
 import Dependencies
 import Foundation
 import GRDB
@@ -1553,5 +1554,98 @@ struct PersistenceTests {
         }
         #expect(activity == later.timeIntervalSince1970,
                 "the older event is history, not the newest activity")
+    }
+
+    // MARK: Sharing — the per-order CKShare door
+
+    /// The mock cloud runs the real sequence: `sendChanges()` flushes the fresh
+    /// order's pending rows, metadata lands, `share(record:)` saves a `CKShare`
+    /// into the mock database. What the test pins is the seam's own law —
+    /// `publicPermission == .none` and the caller's title — so no call site can
+    /// mint a public share (doc:Collaboration → "public sharing stays off").
+    @Test("shareOrder produces a private share carrying the caller's title")
+    func shareOrderIsPrivate() async throws {
+        let database = makeDatabase()
+        let order = Order(
+            created: .now, status: .active,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")],
+            claimID: "claim-share")
+        try database.recordOrder(order)
+
+        try await withDependencies {
+            $0.context = .test
+        } operation: {
+            try await database.syncEngine.start()
+            let shared = try await database.shareOrder(id: order.id, title: "Заказ 4417")
+
+            #expect(shared.share.publicPermission == .none,
+                    "a public share is never this seam's product")
+            #expect(shared.share[CKShare.SystemFieldKey.title] as? String == "Заказ 4417")
+            #expect(try database.orderIsShared(order.id))
+        }
+    }
+
+    /// The second tap is "manage sharing", not a second share — `share(record:)`
+    /// returns the `CKShare` the metadata already knows, so the affordance can
+    /// be one button for both meanings.
+    @Test("Sharing an already-shared order returns the same share")
+    func shareOrderIsIdempotent() async throws {
+        let database = makeDatabase()
+        let order = Order(
+            created: .now, status: .active,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")],
+            claimID: "claim-share-2")
+        try database.recordOrder(order)
+
+        try await withDependencies {
+            $0.context = .test
+        } operation: {
+            try await database.syncEngine.start()
+            let first = try await database.shareOrder(id: order.id, title: "T")
+            let second = try await database.shareOrder(id: order.id, title: "T")
+
+            #expect(first.share.recordID == second.share.recordID)
+        }
+    }
+
+    /// An id nothing has synced shares nothing — the engine's
+    /// metadata-not-found answer travels up rather than minting a share for a
+    /// row that does not exist.
+    @Test("An unknown order cannot be shared")
+    func unknownOrderShareFails() async throws {
+        let database = makeDatabase()
+        await #expect(throws: (any Error).self) {
+            try await withDependencies {
+                $0.context = .test
+            } operation: {
+                try await database.syncEngine.start()
+                _ = try await database.shareOrder(id: UUID(), title: "T")
+            }
+        }
+    }
+
+    /// Unsharing removes the share the metadata recorded — the affordance's
+    /// "share/manage" label flips back. `acceptShare` carries no mock test:
+    /// `CKShare.Metadata` is system-vended with no public initializer, so the
+    /// seam is verified on device (doc:Collaboration's device pass).
+    @Test("Unsharing a shared order clears its share")
+    func unshareClearsShare() async throws {
+        let database = makeDatabase()
+        let order = Order(
+            created: .now, status: .active,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")],
+            claimID: "claim-share-3")
+        try database.recordOrder(order)
+
+        try await withDependencies {
+            $0.context = .test
+        } operation: {
+            try await database.syncEngine.start()
+            _ = try await database.shareOrder(id: order.id, title: "T")
+            try await database.unshareOrder(id: order.id)
+
+            #expect(try !database.orderIsShared(order.id),
+                    "the metadata's share is gone — the order is private again")
+        }
     }
 }
