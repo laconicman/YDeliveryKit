@@ -982,8 +982,9 @@ public nonisolated final class AppDatabase: Sendable {
     public nonisolated enum PendingAcceptanceOutcome {
         /// The card answered nothing yet — stay pending, stamp the check.
         case checked
-        /// The claim materialized — link the order it became.
-        case resolved
+        /// The claim materialized — link the order it became; a resolution
+        /// without the order it landed as would be an unexplained close.
+        case resolved(orderID: UUID)
         /// The claim provably never materialized within the drain's window —
         /// stop asking, keep the audit row.
         case lapsed
@@ -997,12 +998,17 @@ public nonisolated final class AppDatabase: Sendable {
         public let claimID: String
         /// When the loss was recorded — the drain's staleness measure.
         public let createdAt: Date
+        /// Which lost answer this row is — a re-note is a new attempt, and a
+        /// drain outcome must name its attempt so a stale result cannot close
+        /// a newer one (review, PR #12).
+        public let attempt: Int
     }
 
     /// Acceptance attempted, answer lost — remembered so a force-quit cannot
     /// forget a claim that may be spending money (YD-5). Idempotent on
     /// `account ‖ claimID`: noting the same lost answer twice is one row, and a
-    /// re-noted row re-pends — the latest attempt is the one still owed.
+    /// re-noted row is a *new* attempt — fresh `createdAt`, fresh counter —
+    /// because the latest owed answer, not the first, is what the drain owes.
     public func noteUnresolvedAcceptance(claimID: String) throws {
         try queue.write { db in
             try db.execute(sql: """
@@ -1010,7 +1016,9 @@ public nonisolated final class AppDatabase: Sendable {
                   ("id", "providerAccountRef", "claimID", "createdAt", "state")
                 VALUES (?, ?, ?, ?, 'pending')
                 ON CONFLICT("id") DO UPDATE SET
-                  "state" = 'pending', "orderRef" = NULL, "lastCheckedAt" = NULL
+                  "state" = 'pending', "orderRef" = NULL, "lastCheckedAt" = NULL,
+                  "createdAt" = excluded."createdAt",
+                  "attempt" = "pendingAcceptances"."attempt" + 1
                 """, arguments: Self.args([
                     UUID.derived(
                         namespace: UUID.DerivedNamespace.pendingAcceptance,
@@ -1021,35 +1029,42 @@ public nonisolated final class AppDatabase: Sendable {
         }
     }
 
-    /// The pending rows, oldest first — absent and unreadable both read as empty,
-    /// same recovery posture as ``readSyncState``.
+    /// The pending rows, oldest first. Absent reads empty; an *unreadable* queue
+    /// logs rather than posing as empty — the drain otherwise skips the only
+    /// reconciliation this launch may get (same posture ``readSyncState`` takes).
     public func pendingAcceptances() -> [PendingAcceptance] {
         guard let rows = try? queue.read({ db in
             try Row.fetchAll(db, sql: """
-                SELECT "claimID", "createdAt" FROM "pendingAcceptances"
+                SELECT "claimID", "createdAt", "attempt" FROM "pendingAcceptances"
                 WHERE "providerAccountRef" = ? AND "state" = 'pending'
                   AND "claimID" IS NOT NULL
                 ORDER BY "createdAt"
                 """, arguments: Self.args([providerAccountRef]))
-        }) else { return [] }
+        }) else {
+            Self.logger.error("Pending-acceptance read failed; drain skips this pass")
+            return []
+        }
         return rows.map {
             PendingAcceptance(
                 claimID: $0["claimID"],
-                createdAt: Date(timeIntervalSince1970: $0["createdAt"]))
+                createdAt: Date(timeIntervalSince1970: $0["createdAt"]),
+                attempt: $0["attempt"])
         }
     }
 
-    /// The drain's bookkeeping for one pending row. `resolved` and `lapsed` are
-    /// terminal for the poll — the row itself stays: this table is the audit of
-    /// "we POSTed and never saw the answer", and a deleted row is a forgotten
-    /// attempt, not a resolved one.
+    /// The drain's bookkeeping for one read row — matched on the *attempt*, not
+    /// the claim: a re-note landing between the drain's read and this write is a
+    /// new owed answer a stale outcome must not close (review, PR #12).
+    /// `resolved` and `lapsed` are terminal for the poll — the row itself stays:
+    /// this table is the audit of "we POSTed and never saw the answer", and a
+    /// deleted row is a forgotten attempt, not a resolved one.
     public func markPendingAcceptance(
-        _ claimID: String, as outcome: PendingAcceptanceOutcome, orderID: UUID? = nil
+        _ pending: PendingAcceptance, as outcome: PendingAcceptanceOutcome
     ) throws {
-        let state = switch outcome {
-        case .checked: "pending"
-        case .resolved: "resolved"
-        case .lapsed: "lapsed"
+        let (state, orderID): (String, UUID?) = switch outcome {
+        case .checked: ("pending", nil)
+        case .lapsed: ("lapsed", nil)
+        case .resolved(let orderID): ("resolved", orderID)
         }
         try queue.write { db in
             try db.execute(sql: """
@@ -1058,9 +1073,10 @@ public nonisolated final class AppDatabase: Sendable {
                   "orderRef" = COALESCE(?, "orderRef"),
                   "lastCheckedAt" = ?
                 WHERE "providerAccountRef" = ? AND "claimID" = ?
+                  AND "state" = 'pending' AND "attempt" = ?
                 """, arguments: Self.args([
                     state, orderID, Date.now.timeIntervalSince1970,
-                    providerAccountRef, claimID,
+                    providerAccountRef, pending.claimID, pending.attempt,
                 ]))
         }
     }

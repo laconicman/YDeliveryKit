@@ -877,9 +877,10 @@ struct PersistenceTests {
         let pending = try #require(database.pendingAcceptances().first)
         #expect(pending.claimID == "claim-lost")
         #expect(pending.createdAt <= Date.now)
+        #expect(pending.attempt == 1)
 
         let orderID = UUID()
-        try database.markPendingAcceptance("claim-lost", as: .resolved, orderID: orderID)
+        try database.markPendingAcceptance(pending, as: .resolved(orderID: orderID))
         #expect(database.pendingAcceptances().isEmpty,
                 "resolved leaves the drain — the row stays as audit")
 
@@ -894,16 +895,22 @@ struct PersistenceTests {
                 "the check is stamped — when it resolved is part of the record")
     }
 
-    @Test("Noting the same claim twice is one row, re-pended")
+    @Test("Noting the same claim twice is one row — a fresh attempt, not the first")
     func pendingAcceptanceIsIdempotent() throws {
         let database = makeDatabase()
         try database.noteUnresolvedAcceptance(claimID: "claim-lost")
-        try database.markPendingAcceptance("claim-lost", as: .resolved, orderID: UUID())
+        let first = try #require(database.pendingAcceptances().first)
+        try database.markPendingAcceptance(first, as: .resolved(orderID: UUID()))
         try database.noteUnresolvedAcceptance(claimID: "claim-lost")
 
         let rows = database.pendingAcceptances()
+        let second = try #require(rows.first)
         #expect(rows.count == 1, "the derived key absorbs the second note")
-        #expect(rows.first?.claimID == "claim-lost")
+        #expect(second.claimID == "claim-lost")
+        #expect(second.attempt == first.attempt + 1,
+                "a re-note is a new attempt — drains match on it")
+        #expect(second.createdAt >= first.createdAt,
+                "the fresh attempt's deadline is its own, not the first loss's")
         let orderRef: UUID? = try database.queue.read {
             try Row.fetchOne($0, sql: """
                 SELECT "orderRef" FROM "pendingAcceptances"
@@ -913,14 +920,36 @@ struct PersistenceTests {
                 "a re-pended row forgets the stale resolution's link")
     }
 
+    /// The review's race: a re-note landing between the drain's read and its
+    /// outcome write must survive — the mark matches the attempt it read, so a
+    /// stale result cannot close the new attempt (PR #12).
+    @Test("A stale drain outcome cannot close a re-noted attempt")
+    func staleOutcomeCannotCloseNewAttempt() throws {
+        let database = makeDatabase()
+        try database.noteUnresolvedAcceptance(claimID: "claim-lost")
+        let drained = try #require(database.pendingAcceptances().first)
+
+        // The re-note lands mid-drain: the claim's answer is owed again.
+        try database.noteUnresolvedAcceptance(claimID: "claim-lost")
+        try database.markPendingAcceptance(drained, as: .lapsed)
+
+        let rows = database.pendingAcceptances()
+        #expect(rows.count == 1 && rows.first?.attempt == drained.attempt + 1,
+                "the new attempt outlives the old result")
+        #expect(rows.first?.claimID == "claim-lost")
+    }
+
     @Test("A checked row keeps polling; a lapsed one leaves the drain")
     func pendingAcceptanceCheckedAndLapsed() throws {
         let database = makeDatabase()
         try database.noteUnresolvedAcceptance(claimID: "claim-a")
         try database.noteUnresolvedAcceptance(claimID: "claim-b")
+        let rows = database.pendingAcceptances()
+        let a = try #require(rows.first { $0.claimID == "claim-a" })
+        let b = try #require(rows.first { $0.claimID == "claim-b" })
 
-        try database.markPendingAcceptance("claim-a", as: .checked)
-        try database.markPendingAcceptance("claim-b", as: .lapsed)
+        try database.markPendingAcceptance(a, as: .checked)
+        try database.markPendingAcceptance(b, as: .lapsed)
 
         #expect(database.pendingAcceptances().map(\.claimID) == ["claim-a"],
                 "lapsed stops asking — the audit row outlives the poll")
