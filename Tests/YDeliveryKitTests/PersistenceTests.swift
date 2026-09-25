@@ -1627,7 +1627,11 @@ struct PersistenceTests {
     /// Unsharing removes the share the metadata recorded — the affordance's
     /// "share/manage" label flips back. `acceptShare` carries no mock test:
     /// `CKShare.Metadata` is system-vended with no public initializer, so the
-    /// seam is verified on device (doc:Collaboration's device pass).
+    /// seam is verified on device (doc:Collaboration's device pass). The
+    /// `.unknownItem` tolerance — `CloudSharingView`'s Stop Sharing deleting
+    /// the share outside this seam and `unshareOrder` clearing the stale
+    /// cache anyway — needs a remote delete this test can't reach through
+    /// public API; same device-pass debt.
     @Test("Unsharing a shared order clears its share")
     func unshareClearsShare() async throws {
         let database = makeDatabase()
