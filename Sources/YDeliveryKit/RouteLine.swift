@@ -71,8 +71,9 @@ public struct RouteLine: View {
     /// subdued token and survives grayscale like the badges do.
     static let spineColor = Color.secondary
     /// How loudly a selected row announces itself — a tint wash, not a border:
-    /// the badge column stays on the spine's terms.
-    static let selectionTint = 0.12
+    /// the badge column stays on the spine's terms. Public: every selectable
+    /// route row (the draft's included) washes with the same voice.
+    public static let selectionTint = 0.12
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
