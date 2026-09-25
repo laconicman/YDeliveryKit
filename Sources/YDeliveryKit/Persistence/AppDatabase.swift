@@ -26,8 +26,9 @@ public nonisolated final class AppDatabase: Sendable {
     /// is learned). Nothing here knows which provider stands behind the string.
     private let providerAccountRef: String
     /// The `orders.provider`/`providerAccounts.provider` value, derived from the
-    /// account ref's `provider:id` convention — one string names both.
-    private var provider: String {
+    /// account ref's `provider:id` convention — one string names both. Internal so
+    /// same-module extensions (the sharing seam) can stamp rows without re-deriving.
+    var provider: String {
         providerAccountRef.split(separator: ":").first.map(String.init) ?? providerAccountRef
     }
     /// The one-time open result — DDL + legacy migration run inside it. A failure is

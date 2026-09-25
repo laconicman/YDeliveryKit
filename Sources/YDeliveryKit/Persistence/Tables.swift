@@ -15,11 +15,13 @@ import SQLiteData
 @Table("orders")
 nonisolated struct OrderRow: Identifiable {
     let id: UUID
+    @Column(as: Date.UnixEpochSecondsRepresentation.self)
     var createdAt: Date = .init(timeIntervalSince1970: 0)
     var providerAccountRef: String?
     /// No default — the writer names its provider; a package constant would bind
     /// the table to one backend.
     var provider: String
+    @Column(as: Date.UnixEpochSecondsRepresentation.self)
     var lastActivityAt: Date = .init(timeIntervalSince1970: 0)
 }
 
@@ -43,9 +45,13 @@ nonisolated struct OrderProviderStateRow {
     /// The provider's completion estimate in minutes, raw — surfaces compute the
     /// arrival moment from the observation stamp, so the value decays honestly.
     var etaMinutes: Int?
+    @Column(as: Date?.UnixEpochSecondsRepresentation.self)
     var dueAt: Date?
+    @Column(as: Date?.UnixEpochSecondsRepresentation.self)
     var finishedAt: Date?
+    @Column(as: Date?.UnixEpochSecondsRepresentation.self)
     var providerObservedAt: Date?
+    @Column(as: Date.UnixEpochSecondsRepresentation.self)
     var mirroredAt: Date = .init(timeIntervalSince1970: 0)
 }
 
@@ -58,6 +64,7 @@ nonisolated struct OrderOptionsRow {
     var toDoor = true
     var thermobag = false
     var loaders = 0
+    @Column(as: Date?.UnixEpochSecondsRepresentation.self)
     var due: Date?
     var comment = ""
 }
@@ -134,6 +141,7 @@ nonisolated struct ProviderEventRow: Identifiable {
     let id: UUID
     var orderID: OrderRow.ID
     var providerEventID: Int64?
+    @Column(as: Date.UnixEpochSecondsRepresentation.self)
     var at: Date = .init(timeIntervalSince1970: 0)
     var kind = ""
     var providerStatus: String?
@@ -147,6 +155,7 @@ nonisolated struct ProviderEventRow: Identifiable {
 nonisolated struct OrderMessageRow: Identifiable {
     let id: UUID
     var orderID: OrderRow.ID
+    @Column(as: Date.UnixEpochSecondsRepresentation.self)
     var sentAt: Date = .init(timeIntervalSince1970: 0)
     var kind = "text"
     var text: String?
@@ -163,6 +172,7 @@ nonisolated struct OrderAttachmentRow: Identifiable {
     var kind = "photo"
     var caption: String?
     var byteSize: Int64?
+    @Column(as: Date.UnixEpochSecondsRepresentation.self)
     var createdAt: Date = .init(timeIntervalSince1970: 0)
     var authorHint: String?
 }
@@ -185,7 +195,9 @@ nonisolated struct ProviderAccountRow {
     var provider: String
     var corpClientID: String?
     var displayLabel: String?
+    @Column(as: Date?.UnixEpochSecondsRepresentation.self)
     var firstSeenAt: Date?
+    @Column(as: Date?.UnixEpochSecondsRepresentation.self)
     var lastSeenAt: Date?
 }
 
@@ -195,6 +207,7 @@ nonisolated struct OrderPrivateStateRow {
     var orderID: OrderRow.ID
     var personalNote: String?
     var pinned = false
+    @Column(as: Date?.UnixEpochSecondsRepresentation.self)
     var lastSeenActivityAt: Date?
 }
 
@@ -254,7 +267,9 @@ nonisolated struct PendingDiscoveryRow: Identifiable {
     let id: UUID
     var providerAccountRef = ""
     var claimID = ""
+    @Column(as: Date.UnixEpochSecondsRepresentation.self)
     var firstSeenAt: Date = .init(timeIntervalSince1970: 0)
+    @Column(as: Date?.UnixEpochSecondsRepresentation.self)
     var lastAttemptAt: Date?
 }
 
@@ -266,7 +281,9 @@ nonisolated struct PendingAcceptanceRow: Identifiable {
     var providerAccountRef = ""
     var claimID: String?
     var orderRef: UUID?
+    @Column(as: Date.UnixEpochSecondsRepresentation.self)
     var createdAt: Date = .init(timeIntervalSince1970: 0)
+    @Column(as: Date?.UnixEpochSecondsRepresentation.self)
     var lastCheckedAt: Date?
     var state = "pending"
     /// Which lost answer the drain is answering — a re-note bumps it, so a
@@ -282,11 +299,13 @@ nonisolated struct PendingAcceptanceRow: Identifiable {
 @Table("orderDrafts")
 nonisolated struct OrderDraftRow: Identifiable {
     let id: UUID
+    @Column(as: Date.UnixEpochSecondsRepresentation.self)
     var createdAt: Date = .init(timeIntervalSince1970: 0)
     var proCourier = false
     var toDoor = true
     var thermobag = false
     var loaders = 0
+    @Column(as: Date?.UnixEpochSecondsRepresentation.self)
     var due: Date?
     var comment = ""
     var chosenTariff: String?
