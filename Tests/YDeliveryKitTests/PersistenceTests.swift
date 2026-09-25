@@ -370,6 +370,117 @@ struct PersistenceTests {
                 "the stale answer's fields were never written beside the fresh stamp")
     }
 
+    /// The widget surface's data (board `5a`/`5b`): courier, vehicle, the raw ETA
+    /// minutes and their as-of stamp all round-trip through the mirror, and the
+    /// arrival moment derives from *provider* time — never the read's.
+    @Test("Courier, ETA, and the observation stamp round-trip through the mirror")
+    func courierFieldsRoundTrip() throws {
+        let database = makeDatabase()
+        let observed = Date(timeIntervalSince1970: 1_700_000_000)
+        let order = Order(
+            created: .now, status: .active,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")],
+            claimID: "claim-eta",
+            courierName: "Сергей", courierVehicle: "м 234 ор 77", etaMinutes: 14)
+
+        try database.recordOrder(order, providerObservedAt: observed)
+        let stored = try #require(database.readOrders().first)
+
+        #expect(stored.courierName == "Сергей")
+        #expect(stored.courierVehicle == "м 234 ор 77")
+        #expect(stored.etaMinutes == 14)
+        #expect(stored.providerObservedAt == observed)
+        #expect(stored.etaAt == observed.addingTimeInterval(14 * 60),
+                "the arrival moment is the provider's clock plus its own estimate")
+    }
+
+    /// The mirror is the latest sighting's projection: a fresher sighting that
+    /// reports no courier must erase the name a previous one left — displaying a
+    /// courier who is no longer assigned is worse than displaying none.
+    @Test("A sighting without a courier clears the stale name")
+    func sightingWithoutCourierClearsIt() throws {
+        let database = makeDatabase()
+        let order = Order(
+            created: .now, status: .active,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")],
+            claimID: "claim-courier",
+            courierName: "Сергей", etaMinutes: 14)
+        let fresh = Date.now
+
+        try database.recordOrder(order, providerObservedAt: fresh)
+        var reassigned = order
+        reassigned.courierName = nil
+        reassigned.courierVehicle = nil
+        reassigned.etaMinutes = nil
+        try database.recordOrder(reassigned,
+                                 providerObservedAt: fresh.addingTimeInterval(60))
+
+        let stored = try #require(database.readOrders().first)
+        #expect(stored.courierName == nil)
+        #expect(stored.etaMinutes == nil)
+    }
+
+    /// The first column migration: a database born before the courier columns
+    /// gets them via guarded `ALTER TABLE`, its rows survive, and reopening the
+    /// same file is a no-op — the pragma check, not luck, makes it idempotent.
+    @Test("A pre-migration database gains the courier columns, rows intact")
+    func columnMigrationAddsToExistingDatabase() throws {
+        // The file as it stood before the columns landed — old table shape,
+        // one live row that must survive the ALTER.
+        let raw = try DatabaseQueue(
+            path: directory.appendingPathComponent(AppDatabase.filename).path)
+        try raw.write { db in
+            try db.execute(sql: """
+                CREATE TABLE "orders" (
+                  "id" TEXT PRIMARY KEY NOT NULL,
+                  "createdAt" REAL NOT NULL,
+                  "providerAccountRef" TEXT,
+                  "provider" TEXT NOT NULL,
+                  "lastActivityAt" REAL NOT NULL
+                ) STRICT;
+                CREATE TABLE "orderProviderStates" (
+                  "orderID" TEXT PRIMARY KEY NOT NULL
+                    REFERENCES "orders"("id") ON DELETE CASCADE,
+                  "claimID" TEXT, "corpClientID" TEXT, "status" TEXT NOT NULL,
+                  "providerStatus" TEXT, "providerDetail" TEXT,
+                  "tariff" TEXT, "price" TEXT, "currency" TEXT,
+                  "dueAt" REAL, "finishedAt" REAL,
+                  "providerObservedAt" REAL, "mirroredAt" REAL NOT NULL
+                ) STRICT;
+                INSERT INTO "orders"
+                  ("id", "createdAt", "provider", "lastActivityAt")
+                VALUES ('00000000-0000-0000-0000-000000000001',
+                        1700000000, 'test', 1700000000);
+                INSERT INTO "orderProviderStates"
+                  ("orderID", "status", "mirroredAt")
+                VALUES ('00000000-0000-0000-0000-000000000001',
+                        'active', 1700000000);
+                """)
+        }
+
+        let database = makeDatabase()
+        let columns = try database.queue.read { db in
+            try String.fetchAll(db, sql: """
+                SELECT "name" FROM pragma_table_info('orderProviderStates')
+                """)
+        }
+        #expect(columns.contains("courierName")
+                && columns.contains("courierVehicle")
+                && columns.contains("etaMinutes"),
+                "the three late columns all arrived")
+
+        let stored = try database.readOrders()
+        #expect(stored.count == 1, "the pre-existing row survived the ALTER")
+        #expect(stored.first?.status == .active)
+
+        // Reopening is a no-op — the pragma guard absorbs the repeat.
+        _ = try makeDatabase().queue.read { db in
+            try String.fetchAll(db, sql: """
+                SELECT "name" FROM pragma_table_info('orderProviderStates')
+                """)
+        }
+    }
+
     // MARK: Saved places — the editor's semantics
 
     /// The 3e editor's hazard, pinned: retargeting a saved place onto a destination

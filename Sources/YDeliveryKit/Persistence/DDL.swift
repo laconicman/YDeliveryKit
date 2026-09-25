@@ -20,6 +20,7 @@ nonisolated extension AppDatabase {
           "claimID" TEXT, "corpClientID" TEXT, "status" TEXT NOT NULL,
           "providerStatus" TEXT, "providerDetail" TEXT,
           "tariff" TEXT, "price" TEXT, "currency" TEXT,
+          "courierName" TEXT, "courierVehicle" TEXT, "etaMinutes" INTEGER,
           "dueAt" REAL, "finishedAt" REAL,
           "providerObservedAt" REAL, "mirroredAt" REAL NOT NULL
         ) STRICT;
@@ -143,4 +144,15 @@ nonisolated extension AppDatabase {
           "name" TEXT NOT NULL
         ) STRICT;
         """
+
+    /// Columns added after the schema's birth — `CREATE TABLE IF NOT EXISTS`
+    /// creates today's shape but never alters yesterday's table, so each late
+    /// column gets an idempotent `ADD COLUMN` checked against `table_info`
+    /// (SQLite can't add a column to a STRICT table conditionally; the pragma
+    /// check is the guard). (table, column, type) triples, applied in order.
+    static let columnMigrations: [(table: String, column: String, type: String)] = [
+        (OrderProviderStateRow.tableName, "courierName", "TEXT"),
+        (OrderProviderStateRow.tableName, "courierVehicle", "TEXT"),
+        (OrderProviderStateRow.tableName, "etaMinutes", "INTEGER"),
+    ]
 }

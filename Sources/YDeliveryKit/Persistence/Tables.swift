@@ -36,6 +36,13 @@ nonisolated struct OrderProviderStateRow {
     var tariff: String?
     var price: String?
     var currency: String?
+    /// The assigned courier's display name and vehicle descriptor — display-only
+    /// mirror fields the widget and Live Activity render («Сергей · м 234 ор 77»).
+    var courierName: String?
+    var courierVehicle: String?
+    /// The provider's completion estimate in minutes, raw — surfaces compute the
+    /// arrival moment from the observation stamp, so the value decays honestly.
+    var etaMinutes: Int?
     var dueAt: Date?
     var finishedAt: Date?
     var providerObservedAt: Date?

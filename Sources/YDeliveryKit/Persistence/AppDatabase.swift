@@ -78,7 +78,26 @@ public nonisolated final class AppDatabase: Sendable {
     private static func open(in directory: URL, providerAccountRef: String,
                              provider: String) throws -> DatabaseQueue {
         let db = try DatabaseQueue(path: directory.appendingPathComponent(filename).path)
-        try db.write { db in try db.execute(sql: ddl) }
+        try db.write { db in
+            try db.execute(sql: ddl)
+            // The schema's late arrivals: CREATE IF NOT EXISTS never adds a
+            // column to a table that already exists, so each one lands as a
+            // guarded ALTER — the pragma check makes a re-run a no-op.
+            for migration in columnMigrations {
+                let exists = try Row.fetchOne(db, sql: """
+                    SELECT 1 FROM pragma_table_info(?)
+                    WHERE "name" = ?
+                    """, arguments: [migration.table, migration.column]) != nil
+                if !exists {
+                    // Constants from `columnMigrations` — interpolated as SQL
+                    // text, never bound: ALTER takes identifiers, not arguments.
+                    try db.execute(sql: """
+                        ALTER TABLE "\(migration.table)"
+                        ADD COLUMN "\(migration.column)" \(migration.type)
+                        """)
+                }
+            }
+        }
         LegacyMigration.run(
             in: directory, db: db, providerAccountRef: providerAccountRef, provider: provider)
         return db
@@ -235,7 +254,9 @@ public nonisolated final class AppDatabase: Sendable {
         try queue.read { db in
             let rows = try Row.fetchAll(db, sql: """
                 SELECT o."id", o."createdAt",
-                       s."status", s."claimID", s."price", s."currency", s."tariff"
+                       s."status", s."claimID", s."price", s."currency", s."tariff",
+                       s."courierName", s."courierVehicle", s."etaMinutes",
+                       s."providerObservedAt"
                 FROM "orders" o
                 LEFT JOIN "orderProviderStates" s ON s."orderID" = o."id"
                 ORDER BY o."lastActivityAt" DESC
@@ -250,6 +271,10 @@ public nonisolated final class AppDatabase: Sendable {
                 let id: UUID = row["id"]
                 let createdAt: Double = row["createdAt"]
                 let status: String? = row["status"]
+                // REAL epoch, optional: `row["x"] as Double?` would bind the
+                // subscript's Value to non-optional Double and trap on NULL —
+                // the annotation is what makes the decode optional-aware.
+                let observedAt: Double? = row["providerObservedAt"]
                 return Order(
                     id: id,
                     created: Date(timeIntervalSince1970: createdAt),
@@ -258,7 +283,13 @@ public nonisolated final class AppDatabase: Sendable {
                     price: row["price"],
                     currency: row["currency"],
                     tariff: row["tariff"],
-                    claimID: row["claimID"]
+                    claimID: row["claimID"],
+                    courierName: row["courierName"],
+                    courierVehicle: row["courierVehicle"],
+                    etaMinutes: row["etaMinutes"],
+                    providerObservedAt: observedAt.map {
+                        Date(timeIntervalSince1970: $0)
+                    }
                 )
             }
         }
@@ -325,14 +356,18 @@ public nonisolated final class AppDatabase: Sendable {
             try db.execute(sql: """
                 INSERT INTO "orderProviderStates"
                   ("orderID", "claimID", "status", "tariff", "price", "currency",
+                   "courierName", "courierVehicle", "etaMinutes",
                    "providerObservedAt", "mirroredAt")
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT("orderID") DO UPDATE SET
                   "claimID" = excluded."claimID",
                   "status" = excluded."status",
                   "tariff" = excluded."tariff",
                   "price" = excluded."price",
                   "currency" = excluded."currency",
+                  "courierName" = excluded."courierName",
+                  "courierVehicle" = excluded."courierVehicle",
+                  "etaMinutes" = excluded."etaMinutes",
                   "providerObservedAt" = CASE
                     WHEN excluded."providerObservedAt" IS NULL
                       THEN "providerObservedAt"
@@ -344,6 +379,7 @@ public nonisolated final class AppDatabase: Sendable {
                 """, arguments: Self.args([
                     order.id, order.claimID, order.status.rawValue,
                     order.tariff, order.price, order.currency,
+                    order.courierName, order.courierVehicle, order.etaMinutes,
                     providerObservedAt?.timeIntervalSince1970,
                     Date.now.timeIntervalSince1970,
                 ]))
