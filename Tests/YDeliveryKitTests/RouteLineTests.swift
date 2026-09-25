@@ -30,6 +30,28 @@ struct RouteLineTests {
         #expect(stops[0].subtitle == "Иван Петров · +79123456789")
         #expect(stops[1].subtitle == nil)
     }
+
+    @Test("A carried role names the mark — the return leg is not a numbered stop")
+    func carriedRoleWins() {
+        var returnLeg = point("Склад")
+        returnLeg.role = .return
+        var pickup = point("А")
+        pickup.role = .pickup
+        var dropoff = point("Б")
+        dropoff.role = .dropoff
+        let stops = RouteLine.stops(from: [pickup, dropoff, returnLeg])
+        #expect(stops.map(\.role) == [.start, .stop(number: 2), .returnPoint])
+    }
+
+    @Test("A carried drop-off at the end is still the teardrop")
+    func carriedDropoffEnds() {
+        var pickup = point("А")
+        pickup.role = .pickup
+        var dropoff = point("Б")
+        dropoff.role = .dropoff
+        let stops = RouteLine.stops(from: [pickup, dropoff])
+        #expect(stops.map(\.role) == [.start, .end])
+    }
 }
 
 @Suite("RoutePoint contact summary")
