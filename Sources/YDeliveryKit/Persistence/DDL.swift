@@ -127,7 +127,8 @@ nonisolated extension AppDatabase {
           "id" TEXT PRIMARY KEY NOT NULL ON CONFLICT REPLACE DEFAULT (uuid()),
           "providerAccountRef" TEXT NOT NULL, "claimID" TEXT,
           "orderRef" TEXT, "createdAt" REAL NOT NULL,
-          "lastCheckedAt" REAL, "state" TEXT NOT NULL
+          "lastCheckedAt" REAL, "state" TEXT NOT NULL,
+          "attempt" INTEGER NOT NULL DEFAULT 1
         ) STRICT;
         CREATE TABLE IF NOT EXISTS "\(OrderDraftRow.tableName)" (
           "id" TEXT PRIMARY KEY NOT NULL ON CONFLICT REPLACE DEFAULT (uuid()),
@@ -166,5 +167,6 @@ nonisolated extension AppDatabase {
         (RouteStopRow.tableName, "visitStatus", "TEXT", nil),
         (RouteStopRow.tableName, "visitedAt", "REAL", nil),
         (RouteStopRow.tableName, "expectedVisitAt", "REAL", nil),
+        (PendingAcceptanceRow.tableName, "attempt", "INTEGER NOT NULL DEFAULT 1", nil),
     ]
 }

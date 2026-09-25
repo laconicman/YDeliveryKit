@@ -269,6 +269,9 @@ nonisolated struct PendingAcceptanceRow: Identifiable {
     var createdAt: Date = .init(timeIntervalSince1970: 0)
     var lastCheckedAt: Date?
     var state = "pending"
+    /// Which lost answer the drain is answering — a re-note bumps it, so a
+    /// drain result captured before the re-note cannot close the new attempt.
+    var attempt = 1
 }
 
 /// Provisional parked draft — an un-placed order has no provider existence, so it is

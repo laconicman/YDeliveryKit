@@ -35,6 +35,8 @@ extension UUID {
         public static let providerEvent = UUID(uuidString: "9F3A2C5A-7D6E-4C4B-BEAF-3A4B5C6D7E8F")!
         /// The discovery-retry queue: `providerAccountRef ‖ claimID`.
         public static let pendingDiscovery = UUID(uuidString: "AF4B3D6B-8E7F-4D5C-CFB0-4B5C6D7E8F9A")!
+        /// Lost-answer acceptances: `providerAccountRef ‖ claimID`.
+        public static let pendingAcceptance = UUID(uuidString: "C2D5E8F9-A0B1-4C6D-BE2F-7A8B9C0D1E2F")!
         /// Sender-owned field values: `orderID ‖ fieldRef`.
         public static let orderCustomField = UUID(uuidString: "B1C4D7E8-9F0A-4B5C-AD1E-6F7A8B9C0D1E")!
     }
