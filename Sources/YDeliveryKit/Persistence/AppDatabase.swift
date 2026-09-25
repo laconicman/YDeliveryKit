@@ -665,6 +665,20 @@ public nonisolated final class AppDatabase: Sendable {
             name: row["name"], value: row["value"])
     }
 
+    /// The sender's own number for an order — the value the order-number carrier
+    /// carried — as a straight SQL join so surfaces that only read the store
+    /// (a widget's timeline, a Live Activity update) resolve it without the
+    /// app's in-memory field lists.
+    public func orderNumber(for orderID: Order.ID) throws -> String? {
+        try queue.read { db in
+            try String.fetchOne(db, sql: """
+                SELECT f."value" FROM "orderCustomFields" f
+                JOIN "customFieldDefinitions" d ON d."id" = f."fieldRef"
+                WHERE f."orderID" = ? AND d."carrier" = 'orderNumber'
+                """, arguments: Self.args([orderID]))
+        }
+    }
+
     // MARK: - Provider events
 
     /// Records one provider-reported change. The row's derived id makes a replayed
