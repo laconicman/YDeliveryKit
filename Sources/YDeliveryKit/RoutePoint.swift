@@ -79,6 +79,30 @@ nonisolated extension RoutePoint {
         return summary.isEmpty ? nil : summary
     }
 
+    /// The address without its leading city segment — «Москва, Каширское шоссе,
+    /// 52» → «Каширское шоссе, 52». Widgets and Live Activities spend their width
+    /// on what changes; the city is constant within one delivery and is the only
+    /// segment a cramped surface can lose without ambiguity.
+    ///
+    /// The rule is deliberately narrow, and it errs toward keeping the whole
+    /// address: a leading segment is shed only when it carries no digits *and*
+    /// what follows it is a street name — a segment with letters — rather than
+    /// a bare house number. «Каширское шоссе, 52, подъезд 3» keeps its street
+    /// because «52» is no street name; without that second guard the city rule
+    /// would mistake the street for the city (review, Kit PR #8). Anything else
+    /// returns the address verbatim.
+    public var compactAddress: String {
+        let segments = address
+            .components(separatedBy: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+        guard segments.count > 2,
+              let first = segments.first,
+              !first.contains(where: \.isNumber),
+              segments[1].contains(where: \.isLetter)
+        else { return address }
+        return segments.dropFirst().joined(separator: ", ")
+    }
+
     /// What makes two remembered points *the same delivery destination*, so the two
     /// things that deduplicate against each other agree on what "same" means.
     ///

@@ -20,6 +20,7 @@ nonisolated extension AppDatabase {
           "claimID" TEXT, "corpClientID" TEXT, "status" TEXT NOT NULL,
           "providerStatus" TEXT, "providerDetail" TEXT,
           "tariff" TEXT, "price" TEXT, "currency" TEXT,
+          "courierName" TEXT, "courierVehicle" TEXT, "etaMinutes" INTEGER,
           "dueAt" REAL, "finishedAt" REAL,
           "providerObservedAt" REAL, "mirroredAt" REAL NOT NULL
         ) STRICT;
@@ -54,7 +55,8 @@ nonisolated extension AppDatabase {
           "id" TEXT PRIMARY KEY NOT NULL ON CONFLICT REPLACE DEFAULT (uuid()),
           "orderID" TEXT NOT NULL
             REFERENCES "\(OrderRow.tableName)"("id") ON DELETE CASCADE,
-          "fieldRef" TEXT NOT NULL, "name" TEXT NOT NULL, "value" TEXT NOT NULL
+          "fieldRef" TEXT NOT NULL, "name" TEXT NOT NULL, "value" TEXT NOT NULL,
+          "carrier" TEXT
         ) STRICT;
         CREATE TABLE IF NOT EXISTS "\(ProviderEventRow.tableName)" (
           "id" TEXT PRIMARY KEY NOT NULL,
@@ -143,4 +145,22 @@ nonisolated extension AppDatabase {
           "name" TEXT NOT NULL
         ) STRICT;
         """
+
+    /// Columns added after the schema's birth — `CREATE TABLE IF NOT EXISTS`
+    /// creates today's shape but never alters yesterday's table, so each late
+    /// column gets an idempotent `ADD COLUMN` checked against `table_info`
+    /// (SQLite can't add a column to a STRICT table conditionally; the pragma
+    /// check is the guard). (table, column, type, backfill) quadruples, applied
+    /// in order — `backfill` runs once, only when the column was just added.
+    static let columnMigrations: [(table: String, column: String, type: String,
+                                  backfill: String?)] = [
+        (OrderProviderStateRow.tableName, "courierName", "TEXT", nil),
+        (OrderProviderStateRow.tableName, "courierVehicle", "TEXT", nil),
+        (OrderProviderStateRow.tableName, "etaMinutes", "INTEGER", nil),
+        (OrderCustomFieldRow.tableName, "carrier", "TEXT", """
+            UPDATE "orderCustomFields" SET "carrier" = (
+              SELECT "carrier" FROM "customFieldDefinitions"
+              WHERE "customFieldDefinitions"."id" = "orderCustomFields"."fieldRef")
+            """),
+    ]
 }

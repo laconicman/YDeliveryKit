@@ -36,6 +36,13 @@ nonisolated struct OrderProviderStateRow {
     var tariff: String?
     var price: String?
     var currency: String?
+    /// The assigned courier's display name and vehicle descriptor — display-only
+    /// mirror fields the widget and Live Activity render («Сергей · м 234 ор 77»).
+    var courierName: String?
+    var courierVehicle: String?
+    /// The provider's completion estimate in minutes, raw — surfaces compute the
+    /// arrival moment from the observation stamp, so the value decays honestly.
+    var etaMinutes: Int?
     var dueAt: Date?
     var finishedAt: Date?
     var providerObservedAt: Date?
@@ -103,7 +110,8 @@ nonisolated struct OrderItemRow: Identifiable {
 /// A sender-owned field value on the order — shared tier: collaborators read the
 /// same «Заказ 4417». `fieldRef` is a value → `CustomFieldDefinitionRow.id`, not
 /// an FK: the schema is private-tier, and a value outlives its definition on the
-/// `name` snapshot.
+/// `name`/`carrier` snapshots — `carrier` denormalized because a collaborator
+/// cannot join the private tier to ask "which slot was this".
 @Table("orderCustomFields")
 nonisolated struct OrderCustomFieldRow: Identifiable {
     let id: UUID
@@ -111,6 +119,9 @@ nonisolated struct OrderCustomFieldRow: Identifiable {
     var fieldRef = UUID()
     var name = ""
     var value = ""
+    /// `CustomFieldDefinition.Carrier.rawValue`, snapshotted at write — nil on
+    /// rows written before the column existed.
+    var carrier: String?
 }
 
 @Table("providerEvents")

@@ -32,6 +32,34 @@ public nonisolated struct Order: Codable, Hashable, Identifiable, Sendable {
     /// shown above the sender's own vocabulary.
     public var claimID: String?
 
+    /// The assigned courier's name and vehicle («Сергей», «м 234 ор 77») — the
+    /// widget/activity's "who to call" line (board `5a`/`5b`). Provider-mirrored:
+    /// nil until the provider assigns one.
+    public var courierName: String?
+    public var courierVehicle: String?
+
+    /// The provider's completion estimate, minutes, as of the last observation —
+    /// raw, not a date: the arrival moment is `providerObservedAt + etaMinutes`,
+    /// computed at render so a stale estimate never poses as fresh.
+    public var etaMinutes: Int?
+
+    /// The wire's own status word (`"performer_found"`, `"delivery_arrived"`) —
+    /// mirrored raw so surfaces can speak the phase `status` collapses: «едет
+    /// к получателю» and «у двери» are both `.active`. A string, not the
+    /// generated type — the wire vocabulary stays a spelling here.
+    public var providerStatus: String?
+
+    /// When the provider last reported this state — the "as of" stamp shared
+    /// surfaces render (Collaboration → staleness) and the ETA's basis.
+    public var providerObservedAt: Date?
+
+    /// The estimated arrival — the provider's own clock, not the read's.
+    /// Nil when either side is missing.
+    public var etaAt: Date? {
+        guard let etaMinutes, let providerObservedAt else { return nil }
+        return providerObservedAt.addingTimeInterval(TimeInterval(etaMinutes) * 60)
+    }
+
     public init(
         id: UUID = UUID(),
         created: Date,
@@ -40,7 +68,12 @@ public nonisolated struct Order: Codable, Hashable, Identifiable, Sendable {
         price: String? = nil,
         currency: String? = nil,
         tariff: String? = nil,
-        claimID: String? = nil
+        claimID: String? = nil,
+        courierName: String? = nil,
+        courierVehicle: String? = nil,
+        etaMinutes: Int? = nil,
+        providerStatus: String? = nil,
+        providerObservedAt: Date? = nil
     ) {
         self.id = id
         self.created = created
@@ -50,5 +83,10 @@ public nonisolated struct Order: Codable, Hashable, Identifiable, Sendable {
         self.currency = currency
         self.tariff = tariff
         self.claimID = claimID
+        self.courierName = courierName
+        self.courierVehicle = courierVehicle
+        self.etaMinutes = etaMinutes
+        self.providerStatus = providerStatus
+        self.providerObservedAt = providerObservedAt
     }
 }

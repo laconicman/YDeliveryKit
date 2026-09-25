@@ -370,6 +370,249 @@ struct PersistenceTests {
                 "the stale answer's fields were never written beside the fresh stamp")
     }
 
+    /// The widget surface's data (board `5a`/`5b`): courier, vehicle, the raw ETA
+    /// minutes and their as-of stamp all round-trip through the mirror, and the
+    /// arrival moment derives from *provider* time — never the read's.
+    @Test("Courier, ETA, and the observation stamp round-trip through the mirror")
+    func courierFieldsRoundTrip() throws {
+        let database = makeDatabase()
+        let observed = Date(timeIntervalSince1970: 1_700_000_000)
+        let order = Order(
+            created: .now, status: .active,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")],
+            claimID: "claim-eta",
+            courierName: "Сергей", courierVehicle: "м 234 ор 77", etaMinutes: 14,
+            providerStatus: "pickuped")
+
+        try database.recordOrder(order, providerObservedAt: observed)
+        let stored = try #require(database.readOrders().first)
+
+        #expect(stored.courierName == "Сергей")
+        #expect(stored.courierVehicle == "м 234 ор 77")
+        #expect(stored.etaMinutes == 14)
+        #expect(stored.providerStatus == "pickuped",
+                "the wire's own phase word rides the flat order — «у двери» ≠ «едет»")
+        #expect(stored.providerObservedAt == observed)
+        #expect(stored.etaAt == observed.addingTimeInterval(14 * 60),
+                "the arrival moment is the provider's clock plus its own estimate")
+    }
+
+    /// The mirror is the latest sighting's projection: a fresher sighting that
+    /// reports no courier must erase the name a previous one left — displaying a
+    /// courier who is no longer assigned is worse than displaying none.
+    @Test("A sighting without a courier clears the stale name")
+    func sightingWithoutCourierClearsIt() throws {
+        let database = makeDatabase()
+        let order = Order(
+            created: .now, status: .active,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")],
+            claimID: "claim-courier",
+            courierName: "Сергей", etaMinutes: 14)
+        let fresh = Date.now
+
+        try database.recordOrder(order, providerObservedAt: fresh)
+        var reassigned = order
+        reassigned.courierName = nil
+        reassigned.courierVehicle = nil
+        reassigned.etaMinutes = nil
+        try database.recordOrder(reassigned,
+                                 providerObservedAt: fresh.addingTimeInterval(60))
+
+        let stored = try #require(database.readOrders().first)
+        #expect(stored.courierName == nil)
+        #expect(stored.etaMinutes == nil)
+    }
+
+    /// The regression the reviewer caught (Kit PR #8): an unstamped write is a
+    /// *local* edit — an in-memory `Order` from before the last sighting still
+    /// carries that sighting's courier/ETA/provider word. Rewriting the mirror
+    /// with them would regress what the provider reported while keeping its
+    /// fresh stamp — a courier swap displayed as the latest truth.
+    @Test("A local edit cannot rewind a fresher sighting's courier fields")
+    func unstampedWritePreservesCourierMirror() throws {
+        let database = makeDatabase()
+        let observed = Date.now
+        var order = Order(created: .now, status: .active, route: [], claimID: "c-guard")
+        try database.recordOrder(order)
+        // The sighting: courier assigned, ETA and wire word land together.
+        order.courierName = "Сергей"
+        order.courierVehicle = "м 234 ор 77"
+        order.etaMinutes = 14
+        order.providerStatus = "pickuped"
+        try database.recordOrder(order, providerObservedAt: observed)
+
+        // The local edit: the same in-memory copy minus what the sighting
+        // taught it — a route change must not drag the mirror backwards.
+        var staleLocal = order
+        staleLocal.courierName = nil
+        staleLocal.courierVehicle = nil
+        staleLocal.etaMinutes = nil
+        staleLocal.providerStatus = "performer_lookup"
+        staleLocal.route = [RoutePoint(latitude: 55, longitude: 37, address: "Б")]
+        try database.recordOrder(staleLocal)
+
+        let stored = try #require(database.readOrders().first)
+        #expect(stored.courierName == "Сергей",
+                "the fresher sighting's courier survives a local edit")
+        #expect(stored.courierVehicle == "м 234 ор 77")
+        #expect(stored.etaMinutes == 14)
+        #expect(stored.providerStatus == "pickuped",
+                "the wire word is provider-owned too — a local write can't rewind it")
+        #expect(stored.route.first?.address == "Б",
+                "and the local edit itself — the sender's field — applied")
+    }
+
+    /// The collaborator's read (Kit PR #8): the schema is private-tier, so the
+    /// value row's own `carrier` snapshot is the only thing a shared order can
+    /// answer from — no join, no definition.
+    @Test("The order number resolves off the value's own carrier snapshot")
+    func orderNumberNeedsNoDefinition() throws {
+        let database = makeDatabase()
+        let order = Order(created: .now, status: .active, route: [], claimID: "c-num")
+        try database.recordOrder(order, customFields: [
+            OrderCustomField(orderID: order.id, fieldRef: UUID(),
+                             name: "Заказ", value: "4417", carrier: .orderNumber),
+            OrderCustomField(orderID: order.id, fieldRef: UUID(),
+                             name: "Тип груза", value: "Документы", carrier: .none),
+        ])
+        #expect(try database.orderNumber(for: order.id) == "4417")
+    }
+
+    /// Two carrier-conflicting values — history from before the slot was
+    /// re-claimed — must still answer one winner, everywhere. The `fieldRef`
+    /// fallback ordering is the stable one a collaborator can compute.
+    @Test("Conflicting order-number values pick one deterministic winner")
+    func orderNumberConflictIsDeterministic() throws {
+        let database = makeDatabase()
+        let order = Order(created: .now, status: .active, route: [], claimID: "c-num2")
+        let firstRef = UUID(uuidString: "00000000-0000-0000-0000-0000000000A1")!
+        let secondRef = UUID(uuidString: "00000000-0000-0000-0000-0000000000B2")!
+        try database.recordOrder(order, customFields: [
+            OrderCustomField(orderID: order.id, fieldRef: secondRef,
+                             name: "Номер", value: "B", carrier: .orderNumber),
+            OrderCustomField(orderID: order.id, fieldRef: firstRef,
+                             name: "Заказ", value: "A", carrier: .orderNumber),
+        ])
+        // No definitions: the fieldRef fallback sorts — 'A1' < 'B2' wins.
+        #expect(try database.orderNumber(for: order.id) == "A")
+    }
+
+    /// The `carrier` backfill: a database whose values were written before the
+    /// column existed still resolves its numbers — the ALTER fills them from
+    /// the schema that typed them.
+    @Test("The carrier column backfills pre-existing values from the schema")
+    func carrierBackfillsOnMigration() throws {
+        let orderID = UUID(uuidString: "00000000-0000-0000-0000-0000000000C1")!
+        let fieldRef = UUID(uuidString: "00000000-0000-0000-0000-0000000000D1")!
+        // The store's TEXT id columns hold the lowercase form (`args` folds) —
+        // a fixture row must spell them the same or the joins never meet.
+        let raw = try DatabaseQueue(
+            path: directory.appendingPathComponent(AppDatabase.filename).path)
+        try raw.write { db in
+            try db.execute(sql: """
+                CREATE TABLE "orders" (
+                  "id" TEXT PRIMARY KEY NOT NULL,
+                  "createdAt" REAL NOT NULL,
+                  "providerAccountRef" TEXT,
+                  "provider" TEXT NOT NULL,
+                  "lastActivityAt" REAL NOT NULL
+                ) STRICT;
+                CREATE TABLE "orderCustomFields" (
+                  "id" TEXT PRIMARY KEY NOT NULL,
+                  "orderID" TEXT NOT NULL,
+                  "fieldRef" TEXT NOT NULL, "name" TEXT NOT NULL, "value" TEXT NOT NULL
+                ) STRICT;
+                CREATE TABLE "customFieldDefinitions" (
+                  "id" TEXT PRIMARY KEY NOT NULL,
+                  "name" TEXT NOT NULL, "kind" TEXT NOT NULL,
+                  "choicesJSON" TEXT NOT NULL,
+                  "isOptional" INTEGER NOT NULL, "isShownByDefault" INTEGER NOT NULL,
+                  "carrier" TEXT NOT NULL, "position" INTEGER NOT NULL
+                ) STRICT;
+                INSERT INTO "orders"
+                  ("id", "createdAt", "provider", "lastActivityAt")
+                VALUES ('\(orderID.uuidString.lowercased())',
+                        1700000000, 'test', 1700000000);
+                INSERT INTO "customFieldDefinitions"
+                  ("id", "name", "kind", "choicesJSON",
+                   "isOptional", "isShownByDefault", "carrier", "position")
+                VALUES ('\(fieldRef.uuidString.lowercased())', 'Заказ', 'text',
+                        '[]', 1, 1, 'orderNumber', 0);
+                INSERT INTO "orderCustomFields"
+                  ("id", "orderID", "fieldRef", "name", "value")
+                VALUES ('00000000-0000-0000-0000-0000000000e1',
+                        '\(orderID.uuidString.lowercased())',
+                        '\(fieldRef.uuidString.lowercased())',
+                        'Заказ', '4417');
+                """)
+        }
+
+        let database = makeDatabase()
+        #expect(try database.orderNumber(for: orderID) == "4417",
+                "the pre-column value answers through its backfilled carrier")
+    }
+
+    /// The first column migration: a database born before the courier columns
+    /// gets them via guarded `ALTER TABLE`, its rows survive, and reopening the
+    /// same file is a no-op — the pragma check, not luck, makes it idempotent.
+    @Test("A pre-migration database gains the courier columns, rows intact")
+    func columnMigrationAddsToExistingDatabase() throws {
+        // The file as it stood before the columns landed — old table shape,
+        // one live row that must survive the ALTER.
+        let raw = try DatabaseQueue(
+            path: directory.appendingPathComponent(AppDatabase.filename).path)
+        try raw.write { db in
+            try db.execute(sql: """
+                CREATE TABLE "orders" (
+                  "id" TEXT PRIMARY KEY NOT NULL,
+                  "createdAt" REAL NOT NULL,
+                  "providerAccountRef" TEXT,
+                  "provider" TEXT NOT NULL,
+                  "lastActivityAt" REAL NOT NULL
+                ) STRICT;
+                CREATE TABLE "orderProviderStates" (
+                  "orderID" TEXT PRIMARY KEY NOT NULL
+                    REFERENCES "orders"("id") ON DELETE CASCADE,
+                  "claimID" TEXT, "corpClientID" TEXT, "status" TEXT NOT NULL,
+                  "providerStatus" TEXT, "providerDetail" TEXT,
+                  "tariff" TEXT, "price" TEXT, "currency" TEXT,
+                  "dueAt" REAL, "finishedAt" REAL,
+                  "providerObservedAt" REAL, "mirroredAt" REAL NOT NULL
+                ) STRICT;
+                INSERT INTO "orders"
+                  ("id", "createdAt", "provider", "lastActivityAt")
+                VALUES ('00000000-0000-0000-0000-000000000001',
+                        1700000000, 'test', 1700000000);
+                INSERT INTO "orderProviderStates"
+                  ("orderID", "status", "mirroredAt")
+                VALUES ('00000000-0000-0000-0000-000000000001',
+                        'active', 1700000000);
+                """)
+        }
+
+        let database = makeDatabase()
+        let columns = try database.queue.read { db in
+            try String.fetchAll(db, sql: """
+                SELECT "name" FROM pragma_table_info('orderProviderStates')
+                """)
+        }
+        #expect(columns.contains("courierName")
+                && columns.contains("courierVehicle")
+                && columns.contains("etaMinutes"),
+                "the three late columns all arrived")
+
+        let stored = try database.readOrders()
+        #expect(stored.count == 1, "the pre-existing row survived the ALTER")
+        #expect(stored.first?.status == .active)
+
+        // Reopening is a no-op — the pragma guard absorbs the repeat.
+        _ = try makeDatabase().queue.read { db in
+            try String.fetchAll(db, sql: """
+                SELECT "name" FROM pragma_table_info('orderProviderStates')
+                """)
+        }
+    }
+
     // MARK: Saved places — the editor's semantics
 
     /// The 3e editor's hazard, pinned: retargeting a saved place onto a destination

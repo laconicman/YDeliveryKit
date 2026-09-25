@@ -10,9 +10,13 @@ What lives here, and the membership test for anything added: *code an extension 
 needs, which cannot import the app.*
 
 - **Design system:** semantic colors (`Colors.xcassets`), `StatusChip`, `PointBadge`,
-  `RouteLine`,
-  the `Layout` tokens.
-- **App models:** `Order`, `OrderStatus`, `RoutePoint`, `SavedPlace`, `AddressParts`.
+  `RouteLine`, `ETALabel`, `OrderIdentity`, the `Layout` and `SurfaceSize` tokens.
+- **App models:** `Order`, `OrderStatus`, `RoutePoint`, `SavedPlace`, `AddressParts`,
+  and `DeliveryActivityAttributes` — the Live Activity's shared schema, defined here
+  because ActivityKit matches attributes by name *and module*: the app starts and
+  updates the activity, the widget extension renders it, and two copies would be
+  two activities. That is the package's one ActivityKit dependency, and it is why
+  every consumer links the framework.
 - **Persistence substrate:** `AppDatabase` — one `ydelivery.sqlite` in the App Group
   (SQLiteData + GRDB), the contract's three sync tiers, legacy-JSON migration, and the
   lazy `SyncEngine` an extension target shares with the app. Both identifiers are the

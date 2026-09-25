@@ -78,7 +78,32 @@ public nonisolated final class AppDatabase: Sendable {
     private static func open(in directory: URL, providerAccountRef: String,
                              provider: String) throws -> DatabaseQueue {
         let db = try DatabaseQueue(path: directory.appendingPathComponent(filename).path)
-        try db.write { db in try db.execute(sql: ddl) }
+        try db.write { db in
+            try db.execute(sql: ddl)
+            // The schema's late arrivals: CREATE IF NOT EXISTS never adds a
+            // column to a table that already exists, so each one lands as a
+            // guarded ALTER — the pragma check makes a re-run a no-op.
+            for migration in columnMigrations {
+                let exists = try Row.fetchOne(db, sql: """
+                    SELECT 1 FROM pragma_table_info(?)
+                    WHERE "name" = ?
+                    """, arguments: [migration.table, migration.column]) != nil
+                if !exists {
+                    // Constants from `columnMigrations` — interpolated as SQL
+                    // text, never bound: ALTER takes identifiers, not arguments.
+                    try db.execute(sql: """
+                        ALTER TABLE "\(migration.table)"
+                        ADD COLUMN "\(migration.column)" \(migration.type)
+                        """)
+                    // A snapshot column (e.g. `orderCustomFields.carrier`) can
+                    // be filled for rows that predate it — same constant-SQL
+                    // rule as the ALTER itself.
+                    if let backfill = migration.backfill {
+                        try db.execute(sql: backfill)
+                    }
+                }
+            }
+        }
         LegacyMigration.run(
             in: directory, db: db, providerAccountRef: providerAccountRef, provider: provider)
         return db
@@ -235,7 +260,9 @@ public nonisolated final class AppDatabase: Sendable {
         try queue.read { db in
             let rows = try Row.fetchAll(db, sql: """
                 SELECT o."id", o."createdAt",
-                       s."status", s."claimID", s."price", s."currency", s."tariff"
+                       s."status", s."claimID", s."price", s."currency", s."tariff",
+                       s."courierName", s."courierVehicle", s."etaMinutes",
+                       s."providerStatus", s."providerObservedAt"
                 FROM "orders" o
                 LEFT JOIN "orderProviderStates" s ON s."orderID" = o."id"
                 ORDER BY o."lastActivityAt" DESC
@@ -250,6 +277,10 @@ public nonisolated final class AppDatabase: Sendable {
                 let id: UUID = row["id"]
                 let createdAt: Double = row["createdAt"]
                 let status: String? = row["status"]
+                // REAL epoch, optional: `row["x"] as Double?` would bind the
+                // subscript's Value to non-optional Double and trap on NULL —
+                // the annotation is what makes the decode optional-aware.
+                let observedAt: Double? = row["providerObservedAt"]
                 return Order(
                     id: id,
                     created: Date(timeIntervalSince1970: createdAt),
@@ -258,7 +289,14 @@ public nonisolated final class AppDatabase: Sendable {
                     price: row["price"],
                     currency: row["currency"],
                     tariff: row["tariff"],
-                    claimID: row["claimID"]
+                    claimID: row["claimID"],
+                    courierName: row["courierName"],
+                    courierVehicle: row["courierVehicle"],
+                    etaMinutes: row["etaMinutes"],
+                    providerStatus: row["providerStatus"],
+                    providerObservedAt: observedAt.map {
+                        Date(timeIntervalSince1970: $0)
+                    }
                 )
             }
         }
@@ -282,7 +320,10 @@ public nonisolated final class AppDatabase: Sendable {
     /// stamp is at least as new as the stored observation — a delayed answer
     /// describes older provider truth and must not regress any of the fields it
     /// carries, route included (review, PR #7). Unstamped writes are local
-    /// edits and always apply.
+    /// edits and always apply — but only to the fields the sender owns: the
+    /// courier/ETA/provider-word columns move on stamped writes alone, so a
+    /// stale in-memory `Order` editing a route cannot rewind a fresher
+    /// sighting's courier (review, Kit PR #8).
     public func recordOrder(_ order: Order, customFields: [OrderCustomField]? = nil,
                             providerObservedAt: Date? = nil) throws {
         // A draft is not an order — it has no provider existence, and writing one
@@ -316,23 +357,43 @@ public nonisolated final class AppDatabase: Sendable {
                         order.id.uuidString, field.fieldRef.uuidString)
                     try db.execute(sql: """
                         INSERT INTO "orderCustomFields"
-                          ("id", "orderID", "fieldRef", "name", "value")
-                        VALUES (?, ?, ?, ?, ?)
+                          ("id", "orderID", "fieldRef", "name", "value", "carrier")
+                        VALUES (?, ?, ?, ?, ?, ?)
                         """, arguments: Self.args([rowID, order.id, field.fieldRef,
-                                                   field.name, field.value]))
+                                                   field.name, field.value,
+                                                   field.carrier?.rawValue]))
                 }
             }
             try db.execute(sql: """
                 INSERT INTO "orderProviderStates"
                   ("orderID", "claimID", "status", "tariff", "price", "currency",
+                   "courierName", "courierVehicle", "etaMinutes", "providerStatus",
                    "providerObservedAt", "mirroredAt")
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT("orderID") DO UPDATE SET
                   "claimID" = excluded."claimID",
                   "status" = excluded."status",
                   "tariff" = excluded."tariff",
                   "price" = excluded."price",
                   "currency" = excluded."currency",
+                  -- The courier/ETA/provider-word columns are provider-owned
+                  -- mirror values: only a *stamped* merge (a sighting with the
+                  -- provider's as-of time) may rewrite them. An unstamped write
+                  -- is a local edit — a stale in-memory Order must not regress
+                  -- a fresher sighting's courier while keeping its stamp
+                  -- (review, Kit PR #8).
+                  "courierName" = CASE
+                    WHEN excluded."providerObservedAt" IS NOT NULL
+                      THEN excluded."courierName" ELSE "courierName" END,
+                  "courierVehicle" = CASE
+                    WHEN excluded."providerObservedAt" IS NOT NULL
+                      THEN excluded."courierVehicle" ELSE "courierVehicle" END,
+                  "etaMinutes" = CASE
+                    WHEN excluded."providerObservedAt" IS NOT NULL
+                      THEN excluded."etaMinutes" ELSE "etaMinutes" END,
+                  "providerStatus" = CASE
+                    WHEN excluded."providerObservedAt" IS NOT NULL
+                      THEN excluded."providerStatus" ELSE "providerStatus" END,
                   "providerObservedAt" = CASE
                     WHEN excluded."providerObservedAt" IS NULL
                       THEN "providerObservedAt"
@@ -344,6 +405,8 @@ public nonisolated final class AppDatabase: Sendable {
                 """, arguments: Self.args([
                     order.id, order.claimID, order.status.rawValue,
                     order.tariff, order.price, order.currency,
+                    order.courierName, order.courierVehicle, order.etaMinutes,
+                    order.providerStatus,
                     providerObservedAt?.timeIntervalSince1970,
                     Date.now.timeIntervalSince1970,
                 ]))
@@ -621,9 +684,29 @@ public nonisolated final class AppDatabase: Sendable {
     }
 
     private static func orderCustomField(_ row: Row) -> OrderCustomField {
-        OrderCustomField(
+        let carrier: String? = row["carrier"]
+        return OrderCustomField(
             orderID: row["orderID"], fieldRef: row["fieldRef"],
-            name: row["name"], value: row["value"])
+            name: row["name"], value: row["value"],
+            carrier: carrier.flatMap(CustomFieldDefinition.Carrier.init(rawValue:)))
+    }
+
+    /// The sender's own number for an order — the value the order-number carrier
+    /// carried — read off the value row's own `carrier` snapshot: the definitions
+    /// it would join are private-tier, so a collaborator (or a deleted schema)
+    /// has nothing to join against (review, Kit PR #8). The LEFT JOIN supplies
+    /// only ordering — definition position first, `fieldRef` as the stable
+    /// fallback — so two carrier-conflicting values pick one winner everywhere.
+    public func orderNumber(for orderID: Order.ID) throws -> String? {
+        try queue.read { db in
+            try String.fetchOne(db, sql: """
+                SELECT f."value" FROM "orderCustomFields" f
+                LEFT JOIN "customFieldDefinitions" d ON d."id" = f."fieldRef"
+                WHERE f."orderID" = ? AND f."carrier" = 'orderNumber'
+                ORDER BY (d."position" IS NULL), d."position", f."fieldRef"
+                LIMIT 1
+                """, arguments: Self.args([orderID]))
+        }
     }
 
     // MARK: - Provider events
