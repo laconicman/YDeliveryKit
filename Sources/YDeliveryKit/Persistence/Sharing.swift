@@ -41,7 +41,11 @@ extension AppDatabase {
 
     /// Stops sharing one order — deletes the `CKShare`. A call site that wants
     /// "stop sharing" reaches the same place through `CloudSharingView`'s own
-    /// button; this is the seam for anything else (tests, future surfaces).
+    /// button; that button deletes through UIKit, not this seam, and leaves the
+    /// stale cache pointing at the gone share — which is why `.unknownItem`
+    /// tolerates here: the server answering "that share does not exist" is the
+    /// provably-gone case, truthful to clear whether the deletion was ours or
+    /// the sheet's.
     ///
     /// `SyncMetadata.share` is the engine's cache of "which share this record
     /// rides." `SyncEngine.unshare` writes no bookkeeping: it deletes the share
@@ -55,7 +59,11 @@ extension AppDatabase {
     /// (`.unknownItem` reads as no share), so the column can only be more
     /// truthful.
     public func unshareOrder(id: Order.ID) async throws {
-        try await syncEngine.unshare(record: OrderRow(id: id, provider: provider))
+        do {
+            try await syncEngine.unshare(record: OrderRow(id: id, provider: provider))
+        } catch let error as CKError where error.code == .unknownItem {
+            // Provably gone — clearing below is the truth regardless.
+        }
         try await queue.write { db in
             try SyncMetadata
                 .find(OrderRow(id: id, provider: provider).syncMetadataID)
