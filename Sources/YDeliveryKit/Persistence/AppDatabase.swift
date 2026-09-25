@@ -472,14 +472,14 @@ public nonisolated final class AppDatabase: Sendable {
                             Date.now.timeIntervalSince1970]))
     }
 
-    /// The route an unstamped write may safely write: each point re-adopts the
-    /// stored visit of the stop at its destination, so a local edit can't NULL
-    /// out provider truth the mirror still stamps as fresh. Matching is by
+    /// The route an unstamped write may safely write: each point's visit is the
+    /// stored record for its destination — or nothing. A local write never mints
+    /// provider truth: a copied stale visit is dropped where no stored record
+    /// matches (a repeated order arrives with visits and leaves with none), and
+    /// the stored record wins wherever both exist. Matching is by
     /// `destinationKey` — an address edit drops the visit (the courier's arrival
     /// was at the old address) where a reorder keeps it; two stops at the same
-    /// door consume the stored records in position order. A supplied visit where
-    /// nothing is stored is *initial* data — the same latitude an INSERT gives
-    /// the courier columns — and the stored record wins whenever both exist.
+    /// door consume the stored records in position order.
     private static func reinstatingStoredVisits(
         of order: Order, in db: Database
     ) throws -> [RoutePoint] {
@@ -492,12 +492,20 @@ public nonisolated final class AppDatabase: Sendable {
                 stored[stop.destinationKey, default: []].append(visit)
             }
         }
-        guard !stored.isEmpty else { return order.route }
+        guard !stored.isEmpty else {
+            return order.route.map { point in
+                var point = point
+                point.visit = nil
+                return point
+            }
+        }
         return order.route.map { point in
             var point = point
             if var visits = stored[point.destinationKey], !visits.isEmpty {
                 point.visit = visits.removeFirst()
                 stored[point.destinationKey] = visits
+            } else {
+                point.visit = nil
             }
             return point
         }

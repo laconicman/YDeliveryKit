@@ -621,6 +621,32 @@ struct PersistenceTests {
         #expect(stored.route[1].visit?.visitedAt == visitedAt)
     }
 
+    /// The strict half of the rule (review, PR #10): an unstamped write never
+    /// *mints* a visit either — a route copied off a completed order must not
+    /// arrive wearing the courier's account of a run that never happened.
+    @Test("A local write cannot mint a visit record")
+    func unstampedWriteNeverMintsVisits() throws {
+        let database = makeDatabase()
+        let visitedAt = Date(timeIntervalSince1970: 1_700_001_000)
+        var order = Order(
+            created: .now, status: .active,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "Забор")],
+            claimID: "c-source")
+        order.route[0].visit = .init(status: .visited, visitedAt: visitedAt)
+        try database.recordOrder(order, providerObservedAt: .now)
+
+        // A copy repeats the route — the destination changed, the visit stayed.
+        var copy = order
+        copy.id = UUID()
+        copy.claimID = "c-repeat"
+        copy.route[0].address = "Другой адрес"
+        try database.recordOrder(copy)   // unstamped — a local write
+
+        let stored = try #require(database.readOrders().first { $0.id == copy.id })
+        #expect(stored.route[0].visit == nil,
+                "the copied visit does not attach to a destination that never earned it")
+    }
+
     /// The collaborator's read (Kit PR #8): the schema is private-tier, so the
     /// value row's own `carrier` snapshot is the only thing a shared order can
     /// answer from — no join, no definition.

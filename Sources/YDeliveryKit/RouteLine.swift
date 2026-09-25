@@ -127,7 +127,11 @@ public struct RouteLine: View {
             }
         }
         .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(selection == nil ? [] : .isButton)
+        // The button trait says the row answers; `.isSelected` says this row is
+        // the one whose callout is open — the wash has a spoken twin (PR #10).
+        .accessibilityAddTraits(
+            selection == nil ? [] : (isSelected ? [.isButton, .isSelected] : .isButton)
+        )
         .contentShape(Rectangle())
         .onTapGesture {
             selection?.wrappedValue = index
