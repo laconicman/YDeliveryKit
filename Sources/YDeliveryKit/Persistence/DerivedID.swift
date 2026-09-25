@@ -39,5 +39,7 @@ extension UUID {
         public static let pendingAcceptance = UUID(uuidString: "C2D5E8F9-A0B1-4C6D-BE2F-7A8B9C0D1E2F")!
         /// Sender-owned field values: `orderID ‖ fieldRef`.
         public static let orderCustomField = UUID(uuidString: "B1C4D7E8-9F0A-4B5C-AD1E-6F7A8B9C0D1E")!
+        /// Draft field values: `draftID ‖ fieldRef` — the same derivation, one tier down.
+        public static let draftCustomField = UUID(uuidString: "D3E6A1B2-5C7D-4E8F-9A0B-1C2D3E4F5A6B")!
     }
 }
