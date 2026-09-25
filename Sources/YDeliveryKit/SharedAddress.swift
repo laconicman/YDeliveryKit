@@ -32,12 +32,16 @@ public nonisolated enum SharedAddress {
               let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems
         else { return nil }
         let value = { name in query.first(where: { $0.name == name })?.value }
+        // Every component must parse: dropping a bad field and pinning what's
+        // left would put the marker on a coordinate nobody wrote (PR #11).
         let coordinate = (value("ll") ?? value("coordinate"))?
             .split(separator: ",")
-            .compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
-        guard let pair = coordinate, pair.count == 2 else { return nil }
+            .map { Double($0.trimmingCharacters(in: .whitespaces)) }
+        guard let pair = coordinate, pair.count == 2,
+              let latitude = pair[0], let longitude = pair[1]
+        else { return nil }
         return MapsSeed(
-            latitude: pair[0], longitude: pair[1],
+            latitude: latitude, longitude: longitude,
             name: value("q"), address: value("address"))
     }
 
@@ -64,9 +68,11 @@ public nonisolated enum SharedAddress {
     /// lost (the draft's `AddressParts` taxonomy). Label-anchored: a known
     /// detail word takes the word after it as the value.
     public static func doorParts(in text: String) -> AddressParts {
+        // Commas and semicolons are separators, not word edges: «кв. 15,домофон
+        // 77» must not glue `15,домофон` into the apartment (review, PR #11).
         let words = text
-            .components(separatedBy: .whitespacesAndNewlines)
-            .map { $0.trimmingCharacters(in: .init(charactersIn: ",;")) }
+            .components(separatedBy: .whitespacesAndNewlines
+                .union(.init(charactersIn: ",;")))
             .filter { !$0.isEmpty }
         var parts = AddressParts()
         for (index, word) in words.enumerated() {

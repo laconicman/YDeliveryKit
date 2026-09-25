@@ -50,6 +50,14 @@ struct SharedAddressTests {
                 "only Maps' own links claim a pin")
     }
 
+    @Test("A malformed coordinate is no place — the pin is not salvaged")
+    func malformedCoordinateIsNil() throws {
+        // `ll=55.7,bad,37.5` must not pin "55.7, 37.5" — dropping the bad
+        // field puts the marker on a coordinate nobody wrote (review, PR #11).
+        let url = try mapsURL([.init(name: "ll", value: "55.7,bad,37.5")])
+        #expect(SharedAddress.mapsSeed(from: url) == nil)
+    }
+
     @Test("A bare address line is its own candidate — no detection needed")
     func wholeTextFallback() {
         let candidates = SharedAddress.addressCandidates(
@@ -88,6 +96,14 @@ struct SharedAddressTests {
         #expect(parts.apartment == "214")
         #expect(parts.floor == "3")
         #expect(parts.entrance == "Б")
+    }
+
+    @Test("A comma does not glue a door label into the value before it")
+    func commaSeparatedDoorWords() {
+        let parts = SharedAddress.doorParts(in: "кв. 15,домофон 77")
+        #expect(parts.apartment == "15",
+                "the comma splits — «15,домофон» is no flat number (review, PR #11)")
+        #expect(parts.intercom == "77")
     }
 
     @Test("A message with no door words yields no parts")

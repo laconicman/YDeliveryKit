@@ -47,10 +47,12 @@ public nonisolated struct SharedDraft: Codable, Sendable {
 }
 
 /// `shared-draft.json` at the App Group root — the only channel a share
-/// extension has into the app's controllers (the database stays unshared,
-/// Schema → the widget contract). `consume` is read-and-clear: the slot
-/// answers once, so a replayed activation or a stale file cannot open the
-/// same draft twice.
+/// extension has into the app's controllers. The database file *lives* in the
+/// group, but the extension's contract is these flat files only — a suspended
+/// process holding a SQLite lock is a watchdog termination, so nothing but
+/// the app ever opens it (Schema → the widget contract). `consume` is
+/// read-and-clear: the slot answers once, so a replayed activation or a
+/// stale file cannot open the same draft twice.
 public nonisolated enum SharedDraftStore {
     public static let filename = "shared-draft.json"
 
@@ -73,13 +75,20 @@ public nonisolated enum SharedDraftStore {
     /// case — no group, no file, torn bytes, a version this app predates —
     /// and the file is removed either way: a consumed draft must not replay,
     /// and a spoiled one can only ever answer `nil`.
+    ///
+    /// The slot is claimed by rename first: a share landing between the read
+    /// and the removal writes a fresh file under the well-known name, and a
+    /// consumed draft must take only its own bytes away (review, PR #11).
     public static func consume(inAppGroup id: String,
                                fileManager: FileManager = .default) -> SharedDraft? {
         guard let url = url(inAppGroup: id, fileManager: fileManager),
               fileManager.fileExists(atPath: url.path)
         else { return nil }
-        defer { try? fileManager.removeItem(at: url) }
-        guard let data = try? Data(contentsOf: url) else { return nil }
+        let claimed = url.deletingLastPathComponent()
+            .appendingPathComponent(".\(UUID().uuidString).consumed")
+        guard let _ = try? fileManager.moveItem(at: url, to: claimed) else { return nil }
+        defer { try? fileManager.removeItem(at: claimed) }
+        guard let data = try? Data(contentsOf: claimed) else { return nil }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         guard let draft = try? decoder.decode(SharedDraft.self, from: data),
