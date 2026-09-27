@@ -248,12 +248,22 @@ public nonisolated final class AppDatabase: Sendable {
         /// Two field definitions claiming the same carrier would fight over one
         /// wire slot — the second claim is refused until the first releases it.
         case fieldCarrierTaken
+        /// A chat post naming an order that isn't a row here — the stream
+        /// carries no orphans.
+        case messageHasNoOrder
+        /// `attachmentRef` is a value column: the boundary checks the payload
+        /// names the same order, since `PRAGMA foreign_keys` never will.
+        case attachmentOutsideOrder
         public var errorDescription: String? {
             switch self {
             case .draftHasNoProviderExistence:
                 "a draft is not an order — parked drafts live in orderDrafts, not the shared tier"
             case .fieldCarrierTaken:
                 "another field already rides that carrier slot — release it there first"
+            case .messageHasNoOrder:
+                "a message needs its order — the order row does not exist here"
+            case .attachmentOutsideOrder:
+                "a photo message's payload must belong to the same order"
             }
         }
     }
@@ -902,6 +912,127 @@ public nonisolated final class AppDatabase: Sendable {
             providerStatus: row["providerStatus"],
             detail: row["detail"],
             source: row["source"])
+    }
+
+    // MARK: - Chat (shared tier)
+
+    /// Posts to the order's stream — the participant door (doc:Schema →
+    /// `OrderMessage`). Two honesty checks stand in for the foreign keys the
+    /// store deliberately leaves off: the order must be a row here (a message
+    /// for a phantom order would sync a dangling reference to every share),
+    /// and a photo reference must name an attachment *of this order* — the
+    /// column is a `*Ref` value, so the boundary enforces what the DDL can't.
+    ///
+    /// The write bumps no `lastActivityAt`: that column is the owner's
+    /// provider-activity stamp by contract, and list ordering derives the
+    /// message's recency from `sentAt` at read. The stream stays append-only —
+    /// a caller's retry posts the same id, which the table's `REPLACE`
+    /// conflict default folds back into the same row.
+    public func postMessage(_ message: OrderMessage) throws {
+        try queue.write { db in
+            let orderExists = try Row.fetchOne(db, sql: """
+                SELECT 1 FROM "orders" WHERE "id" = ?
+                """, arguments: Self.args([message.orderID])) != nil
+            guard orderExists else { throw WriteError.messageHasNoOrder }
+            if let ref = message.attachmentRef {
+                let sameOrder = try Row.fetchOne(db, sql: """
+                    SELECT 1 FROM "orderAttachments"
+                    WHERE "id" = ? AND "orderID" = ?
+                    """, arguments: Self.args([ref, message.orderID])) != nil
+                guard sameOrder else { throw WriteError.attachmentOutsideOrder }
+            }
+            try Self.insertMessage(message, into: db)
+        }
+    }
+
+    /// A photo post: the attachment, its blob, and the message that carries it
+    /// land in one transaction, so the stream never shows a photo frame whose
+    /// payload failed, and the same-order rule holds by construction rather
+    /// than by check. Returns the posted message — its `attachmentRef` is the
+    /// payload's id, which is how the chat row finds its image.
+    @discardableResult
+    public func postPhotoMessage(
+        orderID: Order.ID, data: Data, sentAt: Date = Date(),
+        caption: String? = nil, authorHint: String? = nil
+    ) throws -> OrderMessage {
+        let attachment = OrderAttachment(
+            orderID: orderID, caption: caption,
+            byteSize: Int64(data.count), createdAt: sentAt,
+            authorHint: authorHint)
+        let message = OrderMessage(
+            orderID: orderID, sentAt: sentAt, kind: OrderMessage.Kind.photo,
+            text: caption, attachmentRef: attachment.id, authorHint: authorHint)
+        try queue.write { db in
+            let orderExists = try Row.fetchOne(db, sql: """
+                SELECT 1 FROM "orders" WHERE "id" = ?
+                """, arguments: Self.args([orderID])) != nil
+            guard orderExists else { throw WriteError.messageHasNoOrder }
+            try db.execute(sql: """
+                INSERT INTO "orderAttachments"
+                  ("id", "orderID", "kind", "caption", "byteSize",
+                   "createdAt", "authorHint")
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, arguments: Self.args([
+                    attachment.id, attachment.orderID, attachment.kind,
+                    attachment.caption, attachment.byteSize,
+                    attachment.createdAt.timeIntervalSince1970,
+                    attachment.authorHint,
+                ]))
+            try db.execute(sql: """
+                INSERT INTO "attachmentBlobs" ("attachmentID", "data")
+                VALUES (?, ?)
+                """, arguments: Self.args([attachment.id, data]))
+            try Self.insertMessage(message, into: db)
+        }
+        return message
+    }
+
+    /// One order's stream, oldest first — the chat surface's read. The stream
+    /// is participant-authored: this is the read the shared detail's message
+    /// list and the receiver's history both draw.
+    public func messages(orderID: Order.ID) throws -> [OrderMessage] {
+        try queue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT * FROM "orderMessages"
+                WHERE "orderID" = ? ORDER BY "sentAt", "id"
+                """, arguments: Self.args([orderID])).map(Self.orderMessage)
+        }
+    }
+
+    /// A photo's bytes — read lazily by id, so the message list carries
+    /// metadata only. `nil` when the blob hasn't synced yet; the row renders
+    /// its frame in the meantime (doc:Schema's CKAsset split makes the blob a
+    /// separately-fetched asset on the wire too).
+    public func attachmentData(_ attachmentID: OrderAttachment.ID) throws -> Data? {
+        try queue.read { db in
+            try Row.fetchOne(db, sql: """
+                SELECT "data" FROM "attachmentBlobs" WHERE "attachmentID" = ?
+                """, arguments: Self.args([attachmentID]))?["data"]
+        }
+    }
+
+    private static func insertMessage(_ message: OrderMessage, into db: Database) throws {
+        try db.execute(sql: """
+            INSERT INTO "orderMessages"
+              ("id", "orderID", "sentAt", "kind", "text",
+               "attachmentRef", "authorHint")
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, arguments: Self.args([
+                message.id, message.orderID,
+                message.sentAt.timeIntervalSince1970, message.kind,
+                message.text, message.attachmentRef, message.authorHint,
+            ]))
+    }
+
+    private static func orderMessage(_ row: Row) -> OrderMessage {
+        OrderMessage(
+            id: row["id"],
+            orderID: row["orderID"],
+            sentAt: Date(timeIntervalSince1970: row["sentAt"]),
+            kind: row["kind"],
+            text: row["text"],
+            attachmentRef: row["attachmentRef"],
+            authorHint: row["authorHint"])
     }
 
     // MARK: - Sync state (device tier)
