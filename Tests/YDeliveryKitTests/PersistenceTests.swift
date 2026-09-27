@@ -1733,6 +1733,51 @@ struct PersistenceTests {
         }
     }
 
+    /// A `photo` post without its payload is a frame with nothing in it —
+    /// photo messages arrive whole through `postPhotoMessage` or not at all.
+    @Test("A photo message with no payload is refused")
+    func payloadlessPhotoRefused() throws {
+        let database = makeDatabase()
+        let order = Order(
+            created: .now, status: .active,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")],
+            claimID: "claim-chat-5")
+        try database.recordOrder(order)
+
+        #expect(throws: AppDatabase.WriteError.photoMessageHasNoPayload) {
+            try database.postMessage(OrderMessage(
+                orderID: order.id, kind: OrderMessage.Kind.photo))
+        }
+    }
+
+    /// Chat is the participant's activity: it never writes `lastActivityAt`
+    /// (owner's provider stamp), yet a fresh message must still lift the
+    /// order in the list — ordering is derived at read, per the contract.
+    @Test("A fresh message lifts its order in the list without touching the stamp")
+    func messageLiftsOrderInReadOrder() throws {
+        let database = makeDatabase()
+        let older = Order(
+            created: .now, status: .active,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")],
+            claimID: "claim-chat-6")
+        let newer = Order(
+            created: .now, status: .active,
+            route: [RoutePoint(latitude: 56, longitude: 38, address: "Б")],
+            claimID: "claim-chat-7")
+        try database.recordOrder(older)
+        try database.recordOrder(newer)
+        #expect(try database.readOrders().first?.id == newer.id,
+                "the newer stamp leads before any chat")
+
+        try database.postMessage(OrderMessage(
+            orderID: older.id,
+            sentAt: Date().addingTimeInterval(60),
+            kind: OrderMessage.Kind.text, text: "гружусь"))
+
+        #expect(try database.readOrders().first?.id == older.id,
+                "the message's sentAt derived the new order — the stamp stayed put")
+    }
+
     /// Chat rows ride the order's share tree like every other single-FK child —
     /// the footprint test pins the tagging, so a participant's message is
     /// provably *inside* the share, not broadcast outside it.

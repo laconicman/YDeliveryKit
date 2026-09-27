@@ -254,6 +254,10 @@ public nonisolated final class AppDatabase: Sendable {
         /// `attachmentRef` is a value column: the boundary checks the payload
         /// names the same order, since `PRAGMA foreign_keys` never will.
         case attachmentOutsideOrder
+        /// A `photo` row without `attachmentRef` renders an empty frame — photo
+        /// posts go through `postPhotoMessage`, which writes payload and row
+        /// in one transaction.
+        case photoMessageHasNoPayload
         public var errorDescription: String? {
             switch self {
             case .draftHasNoProviderExistence:
@@ -264,6 +268,8 @@ public nonisolated final class AppDatabase: Sendable {
                 "a message needs its order — the order row does not exist here"
             case .attachmentOutsideOrder:
                 "a photo message's payload must belong to the same order"
+            case .photoMessageHasNoPayload:
+                "a photo message needs its attachment — post through postPhotoMessage"
             }
         }
     }
@@ -278,7 +284,11 @@ public nonisolated final class AppDatabase: Sendable {
     // MARK: - Orders
 
     /// History as the list reads it: orders joined to their mirrors, stops grouped —
-    /// newest first, matching the file store's publish order.
+    /// newest first. Ordering is a read-time derivation, never a write
+    /// (doc:Schema → "List ordering is derived"): `lastActivityAt` stays the
+    /// owner's provider stamp, and a participant's message or photo lifts the
+    /// order through the `MAX`/`COALESCE` below — each child aggregate
+    /// coalesced to epoch so "no such activity" never wins over a real stamp.
     public func readOrders() throws -> [Order] {
         try queue.read { db in
             let rows = try Row.fetchAll(db, sql: """
@@ -288,7 +298,11 @@ public nonisolated final class AppDatabase: Sendable {
                        s."providerStatus", s."providerObservedAt"
                 FROM "orders" o
                 LEFT JOIN "orderProviderStates" s ON s."orderID" = o."id"
-                ORDER BY o."lastActivityAt" DESC
+                ORDER BY MAX(o."lastActivityAt",
+                    COALESCE((SELECT MAX("sentAt") FROM "orderMessages"
+                              WHERE "orderID" = o."id"), 0),
+                    COALESCE((SELECT MAX("createdAt") FROM "orderAttachments"
+                              WHERE "orderID" = o."id"), 0)) DESC
                 """)
             let stops = try Row.fetchAll(db, sql: """
                 SELECT * FROM "routeStops" ORDER BY "orderID", "position"
@@ -934,6 +948,12 @@ public nonisolated final class AppDatabase: Sendable {
                 SELECT 1 FROM "orders" WHERE "id" = ?
                 """, arguments: Self.args([message.orderID])) != nil
             guard orderExists else { throw WriteError.messageHasNoOrder }
+            // A photo frame with no payload is a broken row, not a minimal one —
+            // photo posts arrive whole through `postPhotoMessage` (review).
+            if message.kind == OrderMessage.Kind.photo,
+               message.attachmentRef == nil {
+                throw WriteError.photoMessageHasNoPayload
+            }
             if let ref = message.attachmentRef {
                 let sameOrder = try Row.fetchOne(db, sql: """
                     SELECT 1 FROM "orderAttachments"
