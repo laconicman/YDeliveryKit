@@ -1652,4 +1652,155 @@ struct PersistenceTests {
                     "the metadata's share is gone — the order is private again")
         }
     }
+
+    // MARK: - The chat stream
+
+    /// Text, photo and structured kinds are one stream, oldest first — the
+    /// same read the chat surface and the receiver's history draw.
+    @Test("A posted stream reads back in order — text, photo, confirmation")
+    func postedMessagesReadBack() throws {
+        let database = makeDatabase()
+        let order = Order(
+            created: .now, status: .active,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")],
+            claimID: "claim-chat-1")
+        try database.recordOrder(order)
+
+        try database.postMessage(OrderMessage(
+            orderID: order.id,
+            sentAt: Date(timeIntervalSince1970: 100),
+            kind: OrderMessage.Kind.text,
+            text: "Подъезд со двора", authorHint: "Ирина"))
+        let photo = try database.postPhotoMessage(
+            orderID: order.id, data: Data([1, 2, 3]),
+            sentAt: Date(timeIntervalSince1970: 200),
+            caption: "Коробка помята", authorHint: "Ирина")
+        try database.postMessage(OrderMessage(
+            orderID: order.id,
+            sentAt: Date(timeIntervalSince1970: 300),
+            kind: OrderMessage.Kind.receptionConfirmed,
+            authorHint: "Ирина"))
+
+        let messages = try database.messages(orderID: order.id)
+        #expect(messages.map(\.kind) == [
+            OrderMessage.Kind.text, OrderMessage.Kind.photo,
+            OrderMessage.Kind.receptionConfirmed])
+        #expect(messages[0].text == "Подъезд со двора")
+        #expect(messages[2].authorHint == "Ирина")
+
+        #expect(photo.kind == OrderMessage.Kind.photo)
+        let payload = try #require(photo.attachmentRef,
+                                   "a photo message names its payload")
+        #expect(try database.attachmentData(payload) == Data([1, 2, 3]))
+    }
+
+    /// `attachmentRef` is a value column — `PRAGMA foreign_keys` stays off, so
+    /// the write boundary checks the payload names the same order rather than
+    /// trusting it.
+    @Test("A photo reference to another order's payload is refused")
+    func crossOrderAttachmentRefused() throws {
+        let database = makeDatabase()
+        let first = Order(
+            created: .now, status: .active,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")],
+            claimID: "claim-chat-2")
+        let second = Order(
+            created: .now, status: .active,
+            route: [RoutePoint(latitude: 56, longitude: 38, address: "Б")],
+            claimID: "claim-chat-3")
+        try database.recordOrder(first)
+        try database.recordOrder(second)
+        let photo = try database.postPhotoMessage(
+            orderID: first.id, data: Data([9]))
+
+        #expect(throws: AppDatabase.WriteError.attachmentOutsideOrder) {
+            try database.postMessage(OrderMessage(
+                orderID: second.id, kind: OrderMessage.Kind.photo,
+                attachmentRef: photo.attachmentRef))
+        }
+        #expect(try database.messages(orderID: second.id).isEmpty,
+                "the refused post left nothing behind")
+    }
+
+    /// No FK enforcement means nothing else stops a post for a phantom order —
+    /// and its dangling row would sync to every share. The boundary refuses.
+    @Test("A message for an order that isn't a row is refused")
+    func phantomOrderMessageRefused() throws {
+        let database = makeDatabase()
+        #expect(throws: AppDatabase.WriteError.messageHasNoOrder) {
+            try database.postMessage(OrderMessage(
+                orderID: UUID(), kind: OrderMessage.Kind.text, text: "алло"))
+        }
+    }
+
+    /// A `photo` post without its payload is a frame with nothing in it —
+    /// photo messages arrive whole through `postPhotoMessage` or not at all.
+    @Test("A photo message with no payload is refused")
+    func payloadlessPhotoRefused() throws {
+        let database = makeDatabase()
+        let order = Order(
+            created: .now, status: .active,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")],
+            claimID: "claim-chat-5")
+        try database.recordOrder(order)
+
+        #expect(throws: AppDatabase.WriteError.photoMessageHasNoPayload) {
+            try database.postMessage(OrderMessage(
+                orderID: order.id, kind: OrderMessage.Kind.photo))
+        }
+    }
+
+    /// Chat is the participant's activity: it never writes `lastActivityAt`
+    /// (owner's provider stamp), yet a fresh message must still lift the
+    /// order in the list — ordering is derived at read, per the contract.
+    @Test("A fresh message lifts its order in the list without touching the stamp")
+    func messageLiftsOrderInReadOrder() throws {
+        let database = makeDatabase()
+        let older = Order(
+            created: .now, status: .active,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")],
+            claimID: "claim-chat-6")
+        let newer = Order(
+            created: .now, status: .active,
+            route: [RoutePoint(latitude: 56, longitude: 38, address: "Б")],
+            claimID: "claim-chat-7")
+        try database.recordOrder(older)
+        try database.recordOrder(newer)
+        #expect(try database.readOrders().first?.id == newer.id,
+                "the newer stamp leads before any chat")
+
+        try database.postMessage(OrderMessage(
+            orderID: older.id,
+            sentAt: Date().addingTimeInterval(60),
+            kind: OrderMessage.Kind.text, text: "гружусь"))
+
+        #expect(try database.readOrders().first?.id == older.id,
+                "the message's sentAt derived the new order — the stamp stayed put")
+    }
+
+    /// Chat rows ride the order's share tree like every other single-FK child —
+    /// the footprint test pins the tagging, so a participant's message is
+    /// provably *inside* the share, not broadcast outside it.
+    @Test("A posted message leaves a share-tree footprint on the order")
+    func messageLeavesShareTreeFootprint() throws {
+        let database = makeDatabase()
+        try withDependencies {
+            $0.context = .test
+        } operation: {
+            _ = try database.syncEngine
+        }
+        let order = Order(
+            created: .now, status: .active,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")],
+            claimID: "claim-chat-4")
+        try database.recordOrder(order)
+        try database.postMessage(OrderMessage(
+            orderID: order.id, kind: OrderMessage.Kind.text, text: "жду"))
+
+        let names = try syncedRecordNames(database)
+        #expect(names.contains { $0.hasSuffix(":orderMessages") },
+                "the message row is tagged for sync under the order's tree")
+        let parents = try parentRecordNames(database)
+        #expect(parents.contains { $0?.hasSuffix(":orders") == true })
+    }
 }
