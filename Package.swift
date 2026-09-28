@@ -7,9 +7,10 @@
 // environment? (The wiki once quoted the corollary as the test; it is the consequence,
 // not the criterion.)
 //
-// The Swift settings mirror the app target (project.yml): same language mode, MainActor
-// default isolation, and the Approachable Concurrency features the app compiles with —
-// one concurrency dialect across app and package.
+// The Swift settings differ by target — one dialect each, the split being the point:
+// `YDeliveryKit` (views, colors, tokens) mirrors the app's MainActor default and
+// Approachable Concurrency features; `YDeliveryData` (models, persistence) is
+// `.defaultIsolation(nil)` — library code picks no executor for its callers.
 import PackageDescription
 
 let package = Package(
@@ -17,7 +18,10 @@ let package = Package(
     defaultLocalization: "en",
     platforms: [.iOS(.v17)],
     products: [
-        .library(name: "YDeliveryKit", targets: ["YDeliveryKit"])
+        // One product, two targets: the consumer's `import YDeliveryKit` is the
+        // whole surface; `YDeliveryData`'s symbols arrive through the umbrella
+        // target's re-export (`Sources/YDeliveryKit/Exports.swift`).
+        .library(name: "YDeliveryKit", targets: ["YDeliveryData", "YDeliveryKit"])
     ],
     dependencies: [
         // Compile-checked SF Symbol names (TechDebt → YD-3); the demo repo already
@@ -40,13 +44,36 @@ let package = Package(
         .package(url: "https://github.com/pointfreeco/swift-dependencies", from: "1.17.0"),
     ],
     targets: [
+        // The data half — models and the persistence substrate. Nonisolated
+        // default: library code does not pick an executor for its callers
+        // (REVIEW flags `nonisolated` here as a no-op). MainActor default was
+        // the package-wide dialect until this target split; the markers that
+        // paid for it lived overwhelmingly in these files.
+        // `NonisolatedNonsendingByDefault` is deliberately absent: it would pin
+        // async methods to the *caller's* executor, and the engine methods
+        // (`startSync`/`shareOrder`/`acceptShare`) deadlocked the GRDB queue
+        // against the test executor in verification. The unflagged default —
+        // generic executor — is the dialect this target wants.
         .target(
-            name: "YDeliveryKit",
+            name: "YDeliveryData",
             dependencies: [
-                .product(name: "SFSafeSymbols", package: "SFSafeSymbols"),
                 .product(name: "SQLiteData", package: "sqlite-data"),
                 .product(name: "GRDB", package: "GRDB.swift"),
                 .product(name: "StructuredQueriesSQLite", package: "swift-structured-queries"),
+            ],
+            swiftSettings: [
+                .defaultIsolation(nil),
+                .enableUpcomingFeature("MemberImportVisibility"),
+            ]
+        ),
+        // The UI half — views, colors, layout tokens. MainActor default is the
+        // right dialect here; its pure value types still state `nonisolated`
+        // (package rule 4 survives inside this target).
+        .target(
+            name: "YDeliveryKit",
+            dependencies: [
+                "YDeliveryData",
+                .product(name: "SFSafeSymbols", package: "SFSafeSymbols"),
             ],
             swiftSettings: [
                 .defaultIsolation(MainActor.self),
@@ -59,6 +86,7 @@ let package = Package(
             name: "YDeliveryKitTests",
             dependencies: [
                 "YDeliveryKit",
+                "YDeliveryData",
                 // The substrate suite drives the queue and engine directly —
                 // same seams the app's suite used when the code lived there.
                 .product(name: "GRDB", package: "GRDB.swift"),

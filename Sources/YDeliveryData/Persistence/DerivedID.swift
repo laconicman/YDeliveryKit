@@ -9,7 +9,7 @@ extension UUID {
     /// re-discovered claim, or a retried migration re-derives the *same* id, so the
     /// second write merges by primary key instead of duplicating — no secondary
     /// UNIQUE constraint, which `SyncEngine` rejects on synchronized tables anyway.
-    public nonisolated static func derived(namespace: UUID, _ components: String...) -> UUID {
+    public static func derived(namespace: UUID, _ components: String...) -> UUID {
         var hasher = Insecure.SHA1()
         hasher.update(data: withUnsafeBytes(of: namespace.uuid) { Data($0) })
         hasher.update(data: Data(components.joined(separator: "|").utf8))
@@ -26,7 +26,7 @@ extension UUID {
 
     /// This app's derivation namespace — distinct per derivation kind, so a stop and
     /// an event derived from the same parts can never collide.
-    public nonisolated enum DerivedNamespace {
+    public enum DerivedNamespace {
         /// Migrated/recorded route children: `orderID ‖ kind ‖ index`.
         public static let orderChild = UUID(uuidString: "7D1E0A3E-5B4C-4A2F-9C8D-1E2F3A4B5C6D")!
         /// Discovered orders: `providerAccountRef ‖ claimID`.

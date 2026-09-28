@@ -10,7 +10,7 @@ import Foundation
 /// and consuming clears it. Like `DeliverySnapshot` the bytes rescue nothing:
 /// a torn handoff is worth less than an absent one, and the sender can always
 /// share again.
-public nonisolated struct SharedDraft: Codable, Sendable {
+public struct SharedDraft: Codable, Sendable {
     /// Bump when a field's *meaning* changes; additive fields decode on old
     /// readers without one.
     public static let currentVersion = 1
@@ -30,7 +30,7 @@ public nonisolated struct SharedDraft: Codable, Sendable {
     /// against the places table.
     public var otherEnd: RoutePoint?
 
-    public nonisolated enum End: String, Codable, Sendable {
+    public enum End: String, Codable, Sendable {
         case pickup
         case dropoff
     }
@@ -53,7 +53,7 @@ public nonisolated struct SharedDraft: Codable, Sendable {
 /// the app ever opens it (Schema → the widget contract). `consume` is
 /// read-and-clear: the slot answers once, so a replayed activation or a
 /// stale file cannot open the same draft twice.
-public nonisolated enum SharedDraftStore {
+public enum SharedDraftStore {
     public static let filename = "shared-draft.json"
 
     /// The extension's write — atomic, first-unlock readable so a share on a

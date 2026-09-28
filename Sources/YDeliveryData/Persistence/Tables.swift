@@ -13,7 +13,7 @@ import SQLiteData
 /// The share root — zero foreign keys by construction. `providerAccountRef` is a
 /// *value* column matching `ProviderAccountRow.key`; NULL reads as *unattributed*.
 @Table("orders")
-nonisolated struct OrderRow: Identifiable {
+struct OrderRow: Identifiable {
     let id: UUID
     @Column(as: Date.UnixEpochSecondsRepresentation.self)
     var createdAt: Date = .init(timeIntervalSince1970: 0)
@@ -27,7 +27,7 @@ nonisolated struct OrderRow: Identifiable {
 
 /// The provider mirror, 1:1 — PK is the FK. Owner-sync writes only.
 @Table("orderProviderStates")
-nonisolated struct OrderProviderStateRow {
+struct OrderProviderStateRow {
     @Column(primaryKey: true)
     var orderID: OrderRow.ID
     var claimID: String?
@@ -57,7 +57,7 @@ nonisolated struct OrderProviderStateRow {
 
 /// The repeatable `DeliveryOptions` fields, 1:1 — PK is the FK again.
 @Table("orderOptions")
-nonisolated struct OrderOptionsRow {
+struct OrderOptionsRow {
     @Column(primaryKey: true)
     var orderID: OrderRow.ID
     var proCourier = false
@@ -71,7 +71,7 @@ nonisolated struct OrderOptionsRow {
 
 /// One stop per row, in travel order.
 @Table("routeStops")
-nonisolated struct RouteStopRow: Identifiable {
+struct RouteStopRow: Identifiable {
     let id: UUID
     var orderID: OrderRow.ID
     var position = 0
@@ -98,7 +98,7 @@ nonisolated struct RouteStopRow: Identifiable {
 /// Parcel contents. `pickupStopRef`/`dropoffStopRef` are *values* → `RouteStopRow.id`;
 /// nil reads as the route's ends.
 @Table("orderItems")
-nonisolated struct OrderItemRow: Identifiable {
+struct OrderItemRow: Identifiable {
     let id: UUID
     var orderID: OrderRow.ID
     var name = ""
@@ -125,7 +125,7 @@ nonisolated struct OrderItemRow: Identifiable {
 /// `name`/`carrier` snapshots — `carrier` denormalized because a collaborator
 /// cannot join the private tier to ask "which slot was this".
 @Table("orderCustomFields")
-nonisolated struct OrderCustomFieldRow: Identifiable {
+struct OrderCustomFieldRow: Identifiable {
     let id: UUID
     var orderID: OrderRow.ID
     var fieldRef = UUID()
@@ -137,7 +137,7 @@ nonisolated struct OrderCustomFieldRow: Identifiable {
 }
 
 @Table("providerEvents")
-nonisolated struct ProviderEventRow: Identifiable {
+struct ProviderEventRow: Identifiable {
     let id: UUID
     var orderID: OrderRow.ID
     var providerEventID: Int64?
@@ -152,7 +152,7 @@ nonisolated struct ProviderEventRow: Identifiable {
 /// The chat — the only participant-writable stream. `attachmentRef` is a value →
 /// `OrderAttachmentRow.id`, same-order rule enforced at the write boundary.
 @Table("orderMessages")
-nonisolated struct OrderMessageRow: Identifiable {
+struct OrderMessageRow: Identifiable {
     let id: UUID
     var orderID: OrderRow.ID
     @Column(as: Date.UnixEpochSecondsRepresentation.self)
@@ -166,7 +166,7 @@ nonisolated struct OrderMessageRow: Identifiable {
 /// Attachment metadata; the payload lives one child down so list queries never drag
 /// image data.
 @Table("orderAttachments")
-nonisolated struct OrderAttachmentRow: Identifiable {
+struct OrderAttachmentRow: Identifiable {
     let id: UUID
     var orderID: OrderRow.ID
     var kind = "photo"
@@ -178,7 +178,7 @@ nonisolated struct OrderAttachmentRow: Identifiable {
 }
 
 @Table("attachmentBlobs")
-nonisolated struct AttachmentBlobRow {
+struct AttachmentBlobRow {
     @Column(primaryKey: true)
     var attachmentID: OrderAttachmentRow.ID
     var data = Data()
@@ -188,7 +188,7 @@ nonisolated struct AttachmentBlobRow {
 
 /// Provider identity, never secrets — the OAuth token stays in the Keychain.
 @Table("providerAccounts")
-nonisolated struct ProviderAccountRow {
+struct ProviderAccountRow {
     @Column(primaryKey: true)
     var key: String  // "<provider>:<accountID>" — the consumer's convention
     /// No default — see `OrderRow.provider`.
@@ -202,7 +202,7 @@ nonisolated struct ProviderAccountRow {
 }
 
 @Table("orderPrivateStates")
-nonisolated struct OrderPrivateStateRow {
+struct OrderPrivateStateRow {
     @Column(primaryKey: true)
     var orderID: OrderRow.ID
     var personalNote: String?
@@ -213,7 +213,7 @@ nonisolated struct OrderPrivateStateRow {
 
 /// The named destinations. FK-less: never a share root — sharing is per-order.
 @Table("savedPlaces")
-nonisolated struct SavedPlaceRow: Identifiable {
+struct SavedPlaceRow: Identifiable {
     let id: UUID
     var name = ""
     var kind = "other"
@@ -235,7 +235,7 @@ nonisolated struct SavedPlaceRow: Identifiable {
 /// to the owner's devices but is nobody's share payload. Values it types live in
 /// `orderCustomFields` on the order itself.
 @Table("customFieldDefinitions")
-nonisolated struct CustomFieldDefinitionRow: Identifiable {
+struct CustomFieldDefinitionRow: Identifiable {
     let id: UUID
     var name = ""
     var kind = "text"
@@ -254,7 +254,7 @@ nonisolated struct CustomFieldDefinitionRow: Identifiable {
 /// Journal position per provider account — per-device by correctness (two devices
 /// sharing a cursor would consume each other's events).
 @Table("syncStates")
-nonisolated struct SyncStateRow {
+struct SyncStateRow {
     @Column(primaryKey: true)
     var providerAccountRef: String
     var journalCursor: String?
@@ -263,7 +263,7 @@ nonisolated struct SyncStateRow {
 
 /// A feed reported a claim whose card fetch failed — retried until the card lands.
 @Table("pendingDiscoveries")
-nonisolated struct PendingDiscoveryRow: Identifiable {
+struct PendingDiscoveryRow: Identifiable {
     let id: UUID
     var providerAccountRef = ""
     var claimID = ""
@@ -276,7 +276,7 @@ nonisolated struct PendingDiscoveryRow: Identifiable {
 /// YD-5's durable home: a POSTed claim whose acceptance answer was lost — reconciled
 /// on launch against `claims/search`. `orderRef` is a value → `OrderRow.id`.
 @Table("pendingAcceptances")
-nonisolated struct PendingAcceptanceRow: Identifiable {
+struct PendingAcceptanceRow: Identifiable {
     let id: UUID
     var providerAccountRef = ""
     var claimID: String?
@@ -297,7 +297,7 @@ nonisolated struct PendingAcceptanceRow: Identifiable {
 /// macro (spike-verified). The option columns mirror `orderOptions` 1:1, plus the
 /// remembered class — everything the sender's draft row needs to resurrect itself.
 @Table("orderDrafts")
-nonisolated struct OrderDraftRow: Identifiable {
+struct OrderDraftRow: Identifiable {
     let id: UUID
     @Column(as: Date.UnixEpochSecondsRepresentation.self)
     var createdAt: Date = .init(timeIntervalSince1970: 0)
@@ -316,7 +316,7 @@ nonisolated struct OrderDraftRow: Identifiable {
 /// persists as position + role + NULLs — the hole is part of the draft. Contact
 /// columns ride the same row, as on `routeStops`.
 @Table("draftStops")
-nonisolated struct DraftStopRow: Identifiable {
+struct DraftStopRow: Identifiable {
     let id: UUID
     var draftID: OrderDraftRow.ID
     var position = 0
@@ -338,7 +338,7 @@ nonisolated struct DraftStopRow: Identifiable {
 /// A parcel row — mirrors `orderItems` minus `orderID`; the journey ends are *Ref*
 /// values → `DraftStopRow.id`, nil reading as the route's ends.
 @Table("draftItems")
-nonisolated struct DraftItemRow: Identifiable {
+struct DraftItemRow: Identifiable {
     let id: UUID
     var draftID: OrderDraftRow.ID
     var name = ""
@@ -360,7 +360,7 @@ nonisolated struct DraftItemRow: Identifiable {
 /// No `name`/`carrier` snapshots: the definitions table sits in the same device
 /// tier, so nothing needs to outlive a join that always works.
 @Table("draftCustomFields")
-nonisolated struct DraftCustomFieldRow: Identifiable {
+struct DraftCustomFieldRow: Identifiable {
     let id: UUID
     var draftID: OrderDraftRow.ID
     var fieldRef = UUID()

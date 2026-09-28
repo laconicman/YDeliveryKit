@@ -1,4 +1,5 @@
 import SwiftUI
+import YDeliveryData
 
 /// The sender's own order number, formatted once (board `5e`): «Заказ №4417»
 /// at regular and expanded, the bare «№4417» at compact. The number is the

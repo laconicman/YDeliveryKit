@@ -4,7 +4,7 @@ import Foundation
 /// board `5d`'s "адрес из чата". Pure functions so the extraction rules are
 /// testable without the extension; the geocoding that resolves a candidate
 /// into a `RoutePoint` stays a runtime service on the extension's side.
-public nonisolated enum SharedAddress {
+public enum SharedAddress {
     /// A Maps-style share: the pin's coordinate plus whatever words it came
     /// with. `name` is the pin's label — a place's name as often as an
     /// address — and `address` the postal string when the source knew it.

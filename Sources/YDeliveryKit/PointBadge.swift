@@ -1,5 +1,6 @@
 import SFSafeSymbols
 import SwiftUI
+import YDeliveryData
 
 /// The one rendering of a route point's role — the board `2c` shape/glyph pair. Shape and
 /// glyph carry the role; color only reinforces (DesignSystem → "Pin & badge taxonomy"),

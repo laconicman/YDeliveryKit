@@ -6,7 +6,7 @@ import Foundation
 ///
 /// Provisional (Phase 1): address parts, roles, and default options arrive with the
 /// Phase-2 schema research; this carries only what the shipped picker can already produce.
-public nonisolated struct RoutePoint: Codable, Hashable, Sendable {
+public struct RoutePoint: Codable, Hashable, Sendable {
     public var latitude: Double
     public var longitude: Double
 
@@ -52,7 +52,7 @@ public nonisolated struct RoutePoint: Codable, Hashable, Sendable {
     /// always written and the wire's `point.type` speaks one-to-one
     /// (`source`/`destination`/`return`). Backticked `return` reads `\.return`
     /// at use sites, like the draft model's own `Role`.
-    public nonisolated enum Role: String, Codable, Hashable, Sendable {
+    public enum Role: String, Codable, Hashable, Sendable {
         case pickup
         case dropoff
         case `return`
@@ -61,7 +61,7 @@ public nonisolated struct RoutePoint: Codable, Hashable, Sendable {
     /// The wire's four per-point visit states (`visit_status`), mirrored
     /// verbatim: `pending` is unvisited, `arrived` the courier at the door,
     /// `visited` the handover done, `skipped` the stop the courier passed by.
-    public nonisolated enum PointVisitStatus: String, Codable, Hashable, Sendable {
+    public enum PointVisitStatus: String, Codable, Hashable, Sendable {
         case pending
         case arrived
         case visited
@@ -73,7 +73,7 @@ public nonisolated struct RoutePoint: Codable, Hashable, Sendable {
     /// while the stop still waits. The wire's `visit_order` is not carried:
     /// the route's array order already *is* the visit order, and a second
     /// source could only disagree with it.
-    public nonisolated struct Visit: Codable, Hashable, Sendable {
+    public struct Visit: Codable, Hashable, Sendable {
         public var status: PointVisitStatus
         public var visitedAt: Date?
         public var expectedAt: Date?
@@ -114,7 +114,7 @@ public nonisolated struct RoutePoint: Codable, Hashable, Sendable {
     }
 }
 
-nonisolated extension RoutePoint {
+extension RoutePoint {
     /// The collapsed contact line — «Иван Петров · +7 912 345-67-89, ext. 12». The
     /// name prefers the stored components, joined by the formatter so order stays
     /// the locale's decision; `contactName` is the fallback for wire-born rows that

@@ -9,7 +9,7 @@ import OSLog
 /// undecodable one is rescued to `*.corrupted-<timestamp>-<id>.json`, and a source
 /// whose insert fails stays put for next launch's retry. Derived child ids make that
 /// retry idempotent (doc:Schema → Migration).
-nonisolated enum LegacyMigration {
+enum LegacyMigration {
     private static let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "YDelivery", category: "persistence")
 

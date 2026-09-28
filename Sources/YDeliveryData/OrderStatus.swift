@@ -9,7 +9,7 @@
 /// String-backed so the provisional store's files stay readable across the Phase-2
 /// schema research (<doc:Roadmap> in the app's catalog): case *names* may be refactored,
 /// raw values are a wire format and may not.
-public nonisolated enum OrderStatus: String, CaseIterable, Hashable, Sendable {
+public enum OrderStatus: String, CaseIterable, Hashable, Sendable {
     /// Nothing sent — the draft exists only on this device.
     case draft
     /// Waiting for a courier to take the order.

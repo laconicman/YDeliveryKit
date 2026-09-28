@@ -1,11 +1,16 @@
 import ActivityKit
 import Foundation
+import YDeliveryData
 
 /// The Live Activity's shared schema (board `5d`). One definition in the Kit
 /// because the type must compile identically in the app (which starts and
 /// updates the activity) and the widget extension (which renders it) —
 /// ActivityKit matches attributes by name and module, so two copies would be
 /// two activities.
+///
+/// It lives in `YDeliveryKit` — the UI target, not `YDeliveryData` — for that
+/// same reason: the module name is part of the identity, and moving modules
+/// would orphan every activity still running across an app update.
 ///
 /// `nonisolated`: a plain value payload — the update path runs off the main
 /// actor inside the activity lifecycle.

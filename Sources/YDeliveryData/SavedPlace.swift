@@ -7,7 +7,7 @@ import Foundation
 /// Provisional (Phase 2), like `Order`: default role and default options join with the
 /// schema research. The `2c` place kinds that are routes' destinations (ПВЗ, постамат)
 /// join when the app can actually send to one.
-public nonisolated struct SavedPlace: Codable, Hashable, Identifiable, Sendable {
+public struct SavedPlace: Codable, Hashable, Identifiable, Sendable {
     public var id: UUID
     /// What the chip says — «Дом», «Склад на Невском».
     public var name: String
@@ -15,7 +15,7 @@ public nonisolated struct SavedPlace: Codable, Hashable, Identifiable, Sendable 
     /// The point this place fills into a route row, contact included.
     public var point: RoutePoint
 
-    public nonisolated enum Kind: String, Codable, Hashable, Sendable, CaseIterable {
+    public enum Kind: String, Codable, Hashable, Sendable, CaseIterable {
         case home
         case warehouse
         case shop

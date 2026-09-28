@@ -8,7 +8,7 @@ import Foundation
 /// Provisional (Phase 1): price, items, options, the vendor's claim id, and the sender's
 /// own fields join with the Phase-2 schema research — this is the substrate's spine, not
 /// the final schema.
-public nonisolated struct Order: Codable, Hashable, Identifiable, Sendable {
+public struct Order: Codable, Hashable, Identifiable, Sendable {
     public var id: UUID
 
     /// When the sender created it, locally — ordering is meaningful offline history
@@ -101,7 +101,7 @@ public nonisolated struct Order: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
-nonisolated extension Array where Element == RoutePoint {
+extension Array where Element == RoutePoint {
     /// The index ``Order/destinationPoint`` resolves to, for a caller holding
     /// the bare route — the last drop-off, so a return leg riding last is
     /// never mistaken for the parcel's destination.

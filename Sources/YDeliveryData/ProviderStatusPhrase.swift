@@ -12,7 +12,7 @@ import Foundation
 ///
 /// An unknown word returns `nil` — a new wire spelling degrades to the
 /// collapsed status words, never to a crash and never to the raw enum.
-public nonisolated enum ProviderStatusPhrase {
+public enum ProviderStatusPhrase {
     /// The phrase for a wire status spelling, or nil for one we don't know.
     public static func phrase(for providerStatus: String) -> LocalizedStringResource? {
         switch providerStatus {

@@ -4,7 +4,7 @@ extension LocalizedStringResource.BundleDescription {
     /// The package's own bundle — `LocalizedStringResource` cannot take `Bundle.module`
     /// directly, only a description of where to find it. Shared by every component whose
     /// words must read identically in app, widget, and notification.
-    nonisolated static let kit = atURL(Bundle.kit.bundleURL)
+    public static let kit = atURL(Bundle.kit.bundleURL)
 }
 
 private final class KitBundleAnchor {}
@@ -15,7 +15,7 @@ extension Bundle {
     /// including a `static let` initializer — cannot read it at all. Re-derived with
     /// the same candidate search order, over Foundation API that is nonisolated on
     /// every toolchain.
-    nonisolated static let kit: Bundle = {
+    public static let kit: Bundle = {
         let bundleName = "YDeliveryKit_YDeliveryKit"
         let overrides: [URL]
         #if DEBUG
@@ -36,6 +36,16 @@ extension Bundle {
             if let url = candidate?.appendingPathComponent("\(bundleName).bundle"),
                let bundle = Bundle(url: url) {
                 return bundle
+            }
+        }
+        // Framework-packaged hosts keep the resource bundle beside *YDeliveryKit*,
+        // a module this file cannot anchor to — the anchor lives here, in the data
+        // target, and its bundle is the wrong neighbour. Sweep every loaded bundle
+        // and framework for a nested copy before giving up.
+        for bundle in Bundle.allBundles + Bundle.allFrameworks where bundle != Bundle.main {
+            if let url = bundle.url(forResource: bundleName, withExtension: "bundle"),
+               let found = Bundle(url: url) {
+                return found
             }
         }
         fatalError("unable to find bundle named \(bundleName)")

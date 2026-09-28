@@ -10,7 +10,7 @@ import SQLiteData
 // Without it the engine's record reads decode-fail per row and a shared or
 // synced row carrying a date silently never reaches iCloud.
 public extension Date {
-    nonisolated struct UnixEpochSecondsRepresentation: QueryRepresentable {
+    struct UnixEpochSecondsRepresentation: QueryRepresentable {
         public var queryOutput: Date
 
         public init(queryOutput: Date) {
@@ -33,19 +33,19 @@ public extension Date? {
     typealias UnixEpochSecondsRepresentation = Date.UnixEpochSecondsRepresentation?
 }
 
-nonisolated extension Date.UnixEpochSecondsRepresentation: QueryBindable {
+extension Date.UnixEpochSecondsRepresentation: QueryBindable {
     public var queryBinding: QueryBinding {
         .double(queryOutput.timeIntervalSince1970)
     }
 }
 
-nonisolated extension Date.UnixEpochSecondsRepresentation: QueryDecodable {
+extension Date.UnixEpochSecondsRepresentation: QueryDecodable {
     public init(decoder: inout some QueryDecoder) throws {
         try self.init(queryOutput: Date(timeIntervalSince1970: Double(decoder: &decoder)))
     }
 }
 
-nonisolated extension Date.UnixEpochSecondsRepresentation: SQLiteType {
+extension Date.UnixEpochSecondsRepresentation: SQLiteType {
     public static var typeAffinity: SQLiteTypeAffinity {
         Double.typeAffinity
     }
