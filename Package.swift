@@ -48,6 +48,11 @@ let package = Package(
         // (REVIEW flags `nonisolated` here as a no-op). MainActor default was
         // the package-wide dialect until this target split; the markers that
         // paid for it lived overwhelmingly in these files.
+        // `NonisolatedNonsendingByDefault` is deliberately absent: it would pin
+        // async methods to the *caller's* executor, and the engine methods
+        // (`startSync`/`shareOrder`/`acceptShare`) deadlocked the GRDB queue
+        // against the test executor in verification. The unflagged default —
+        // generic executor — is the dialect this target wants.
         .target(
             name: "YDeliveryData",
             dependencies: [
