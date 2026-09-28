@@ -9,7 +9,7 @@ import Foundation
 /// Same judgement calls as the snapshot: a rendering, not a schema — torn or
 /// unreadable bytes read as *empty* (the row simply hides), writes are atomic,
 /// and nothing rescues a spoiled file because the app's next read rewrites it.
-public nonisolated enum SavedPlacesFile {
+public enum SavedPlacesFile {
     public static let filename = "saved-places.json"
 
     /// The extension's read. `[]` covers no group, no file, and torn bytes —

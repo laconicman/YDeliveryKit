@@ -9,7 +9,7 @@ import Foundation
 /// `orderID ‖ providerStatus ‖ source` for sightings with no feed id — a
 /// replayed event re-derives the same key and merges instead of duplicating
 /// (the schema's dedup rule, doc:Schema).
-public nonisolated struct ProviderEvent: Codable, Hashable, Identifiable, Sendable {
+public struct ProviderEvent: Codable, Hashable, Identifiable, Sendable {
     public var id: UUID
     public var orderID: Order.ID
     /// The feed's own sequence id — `nil` for sightings reported outside a feed
@@ -58,7 +58,7 @@ public nonisolated struct ProviderEvent: Codable, Hashable, Identifiable, Sendab
 /// event's": the transition a notification announces. A replay, a stale event,
 /// and a re-sighting of the same word all report `false` — only a genuinely
 /// new provider observation of a *different* status advances.
-public nonisolated struct ProviderEventOutcome: Sendable, Equatable {
+public struct ProviderEventOutcome: Sendable, Equatable {
     public var inserted: Bool
     public var statusAdvanced: Bool
 

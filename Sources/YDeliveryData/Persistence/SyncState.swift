@@ -7,7 +7,7 @@ import Foundation
 ///
 /// The account this state belongs to is `AppDatabase.providerAccountRef`'s business —
 /// the value carries the sync position, nothing else.
-public nonisolated struct SyncState: Hashable, Sendable {
+public struct SyncState: Hashable, Sendable {
     /// The provider's next-page token — a JWT on the wire today, but nothing
     /// here decodes it.
     public var cursor: String?

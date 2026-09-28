@@ -1,4 +1,5 @@
 import SwiftUI
+import YDeliveryData
 
 /// The arrival estimate, spoken the same way on every surface (board `5e`):
 /// «в 9:41» on the clock form, «~14 мин» on the duration form, and «обычно

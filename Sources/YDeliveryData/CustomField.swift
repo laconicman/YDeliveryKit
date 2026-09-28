@@ -7,7 +7,7 @@ import Foundation
 /// The schema is synced to the owner's devices but never shared — it lives in
 /// the private tier (`customFieldDefinitions`), while the values it types ride
 /// on the order itself (`orderCustomFields`, shared tier).
-public nonisolated struct CustomFieldDefinition: Codable, Hashable, Identifiable, Sendable {
+public struct CustomFieldDefinition: Codable, Hashable, Identifiable, Sendable {
     /// What a typed answer looks like — the draft renders a text field or a picker.
     public enum Kind: String, Codable, Sendable {
         case text
@@ -83,7 +83,7 @@ public nonisolated struct CustomFieldDefinition: Codable, Hashable, Identifiable
 /// and `carrier` specifically is what lets a *collaborator* read the order
 /// number: their tier never sees `customFieldDefinitions`, so a join that
 /// needs it returns nothing (review, Kit PR #8; TechDebt YD-17).
-public nonisolated struct OrderCustomField: Codable, Hashable, Identifiable, Sendable {
+public struct OrderCustomField: Codable, Hashable, Identifiable, Sendable {
     /// Derived: `orderID ‖ fieldRef` — a replayed write merges, never duplicates.
     public var id: UUID
     public var orderID: Order.ID

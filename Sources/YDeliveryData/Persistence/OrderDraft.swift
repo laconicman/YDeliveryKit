@@ -14,7 +14,7 @@ import Foundation
 /// shared tier's shape (`routeStops`/`orderItems`) so promoting a draft to an
 /// order at placement is a mechanical copy, and a draft outliving this app's
 /// vocabulary still reads row-for-row.
-public nonisolated struct OrderDraft: Hashable, Sendable {
+public struct OrderDraft: Hashable, Sendable {
     public var id: UUID
     /// When the draft began — kept stable across saves, so "the draft" ages.
     public var createdAt: Date
@@ -54,7 +54,7 @@ public nonisolated struct OrderDraft: Hashable, Sendable {
     }
 
     /// One route stop — the draft row's id and role plus an optional filled point.
-    public nonisolated struct Stop: Hashable, Sendable, Identifiable {
+    public struct Stop: Hashable, Sendable, Identifiable {
         public var id: UUID
         /// The draft's role vocabulary is the consumer's (`pickup`/`dropoff`/
         /// `return` and whatever it adds later) — a plain spelling here, the same
@@ -76,7 +76,7 @@ public nonisolated struct OrderDraft: Hashable, Sendable {
     /// One parcel row — mirrors `orderItems`; the journey ends are *values* →
     /// `Stop.id`, nil reading as the route's ends (`*Ref`, not an FK — an item
     /// outliving its named stop must not take the parcel with it on CASCADE).
-    public nonisolated struct Item: Hashable, Sendable, Identifiable {
+    public struct Item: Hashable, Sendable, Identifiable {
         public var id: UUID
         public var name = ""
         public var quantity = 1

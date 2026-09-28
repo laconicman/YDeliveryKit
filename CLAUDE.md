@@ -16,8 +16,15 @@ app's DocC catalogue — cite it, do not re-derive it.
 3. **The substrate never destroys bytes.** Absent and malformed files read as empty;
    unreadable files throw; writes rescue undecodable bytes into collision-proof
    `*.corrupted-<t>-<id>.json` sidecars before overwriting.
-4. **Pure value types and their extensions are `nonisolated`** — extensions do not
-   inherit it under this package's MainActor default isolation. State it every time.
+4. **Isolation differs per target.** `YDeliveryKit` (the UI half) runs MainActor
+   default: pure value types and their extensions there are `nonisolated` — extensions
+   do not inherit it, so state it every time. `YDeliveryData` (models + persistence)
+   is explicitly `.defaultIsolation(nil)`: `nonisolated` is a no-op there — do not
+   write it. New files choose their target by kind: views, colors, layout tokens →
+   `YDeliveryKit`; value types, stores, sync machinery → `YDeliveryData`. The one
+   exception is `DeliveryActivityAttributes`: ActivityKit keys a type by name *and*
+   module, so it stays UI-side to keep in-flight Live Activities matching across
+   updates — its own doc comment says so.
 5. **Additive changes patch; source breaks bump the minor while `0.x`, stated in the PR
    description.** Consumers pin `minorVersion`, so an unstated break lands on them at
    their next resolve.

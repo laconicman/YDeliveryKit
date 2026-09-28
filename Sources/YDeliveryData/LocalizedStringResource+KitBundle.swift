@@ -4,7 +4,7 @@ extension LocalizedStringResource.BundleDescription {
     /// The package's own bundle — `LocalizedStringResource` cannot take `Bundle.module`
     /// directly, only a description of where to find it. Shared by every component whose
     /// words must read identically in app, widget, and notification.
-    nonisolated static let kit = atURL(Bundle.kit.bundleURL)
+    public static let kit = atURL(Bundle.kit.bundleURL)
 }
 
 private final class KitBundleAnchor {}
@@ -15,7 +15,7 @@ extension Bundle {
     /// including a `static let` initializer — cannot read it at all. Re-derived with
     /// the same candidate search order, over Foundation API that is nonisolated on
     /// every toolchain.
-    nonisolated static let kit: Bundle = {
+    public static let kit: Bundle = {
         let bundleName = "YDeliveryKit_YDeliveryKit"
         let overrides: [URL]
         #if DEBUG

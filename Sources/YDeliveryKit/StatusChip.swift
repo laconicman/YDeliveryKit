@@ -1,5 +1,6 @@
 import SFSafeSymbols
 import SwiftUI
+import YDeliveryData
 
 /// The one rendering of an order's status: color, glyph, and words, always together —
 /// a status color never appears without its glyph and its words (DesignSystem →

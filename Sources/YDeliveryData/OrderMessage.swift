@@ -9,7 +9,7 @@ import Foundation
 /// Append-only is the contract, not a constraint SQLite can state: nothing
 /// calls `UPDATE` on the stream, and the audit fallback for a rewritten row
 /// is the record's `lastModifiedBy`, not a trigger.
-public nonisolated struct OrderMessage: Codable, Hashable, Identifiable, Sendable {
+public struct OrderMessage: Codable, Hashable, Identifiable, Sendable {
     /// Caller-held, not derived: a retried post reuses the caller's id and the
     /// `ON CONFLICT REPLACE` default lands the same row — an at-least-once tap
     /// stays one message.
@@ -58,7 +58,7 @@ public nonisolated struct OrderMessage: Codable, Hashable, Identifiable, Sendabl
 /// `attachmentBlobs` so the message list never drags image data
 /// (doc:Schema). Participants may add: a receiver documenting condition is
 /// the product story.
-public nonisolated struct OrderAttachment: Codable, Hashable, Identifiable, Sendable {
+public struct OrderAttachment: Codable, Hashable, Identifiable, Sendable {
     public var id: UUID
     public var orderID: Order.ID
     /// `photo` today; open like ``OrderMessage.kind``.

@@ -26,9 +26,12 @@ the diff-level cues and the noise filters.
 - Require a running `#Preview` on every view in the diff (`StatusChip`, `PointBadge`,
   and successors); previews construct their own values and never require a consumer's
   environment.
-- Pure value types and their extensions are `nonisolated` — extensions do **not**
-  inherit it from the type under MainActor-default isolation, so flag a new extension
-  on a model type that omits the keyword (the app repo paid for this twice).
+- Pure value types and their extensions in `Sources/YDeliveryKit/` are `nonisolated` —
+  extensions do **not** inherit it from the type under that target's MainActor-default
+  isolation, so flag a new extension on a UI-adjacent value type that omits the keyword
+  (the app repo paid for this twice). The inverse holds in `Sources/YDeliveryData/`:
+  flag `nonisolated` there as a no-op — the target's whole module is nonisolated by
+  explicit `.defaultIsolation(nil)`.
 - Status semantics never ride on color alone: a status-bearing component pairs its
   color with a glyph and words, and the grayscale-distinguishability test is the
   regression gate — flag a new status surface without one.

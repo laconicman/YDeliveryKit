@@ -12,7 +12,7 @@ import Foundation
 /// the resolved order number — so a reader never re-derives app rules, and a
 /// collaborator's extension never needs the private-tier definitions that
 /// typed a value (YD-17).
-public nonisolated struct DeliverySnapshot: Codable, Sendable {
+public struct DeliverySnapshot: Codable, Sendable {
     /// Bump when a field's *meaning* changes; additive fields decode on old
     /// readers without one.
     public static let currentVersion = 1
@@ -31,7 +31,7 @@ public nonisolated struct DeliverySnapshot: Codable, Sendable {
         self.orders = orders
     }
 
-    public nonisolated struct Entry: Codable, Sendable, Identifiable {
+    public struct Entry: Codable, Sendable, Identifiable {
         public var id: UUID
         public var status: OrderStatus
         /// The waiting widget's membership — a claim exists and the story
@@ -79,7 +79,7 @@ public nonisolated struct DeliverySnapshot: Codable, Sendable {
     }
 }
 
-public nonisolated extension DeliverySnapshot.Entry {
+public extension DeliverySnapshot.Entry {
     /// The render the app performs on material change. `isLive` is decided
     /// here — a live order is a provider-tracked one whose story isn't over —
     /// so the extension's membership check is a stored fact, not a second copy
@@ -108,7 +108,7 @@ public nonisolated extension DeliverySnapshot.Entry {
 /// *absent* (the extension's empty state) rather than earning a sidecar.
 /// Writes are atomic — a reader mid-render sees the last complete file or
 /// the new one, never a torn half.
-public nonisolated enum DeliverySnapshotStore {
+public enum DeliverySnapshotStore {
     public static let filename = "deliveries-snapshot.json"
 
     /// The extension's read. `nil` covers every unreadable case — no group,

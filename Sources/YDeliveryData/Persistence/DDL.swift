@@ -1,6 +1,6 @@
 import Foundation
 
-nonisolated extension AppDatabase {
+extension AppDatabase {
     /// The contract's DDL, verbatim from doc:Schema — table names interpolate from the
     /// `@Table` declarations so the two can never drift. `SyncEngine` reads FK-ness
     /// from `PRAGMA foreign_key_list`: `*Ref` columns carry no `REFERENCES` clause,

@@ -23,7 +23,11 @@ needs, which cannot import the app.*
   consuming app's to name (`inAppGroup(id:providerAccountRef:containerIdentifier:)`):
   the group, the provider account, and the CloudKit container belong to the host.
 
-Swift 6, iOS 17 floor, `MainActor` default isolation with `nonisolated` value types.
+Swift 6, iOS 17 floor. Two targets, two dialects: `YDeliveryData` (models + persistence)
+is `.defaultIsolation(nil)` — library code does not pick an executor for its callers;
+`YDeliveryKit` (views, colors, tokens) keeps `MainActor` default, where `nonisolated`
+remains explicit on pure value types. `import YDeliveryKit` re-exports the data half,
+so consumers see one surface.
 Swift Testing throughout. Depends on SFSafeSymbols, SQLiteData, GRDB, and
 swift-structured-queries (the `StructuredQueriesSQLite` product is linked directly:
 the `@Table` expansions resolve `StructuredQueriesCore` symbols against it).

@@ -5,7 +5,7 @@
 /// `sfloor`, `door_code`) appear only at the controller boundary. All strings — an
 /// entrance is «А» as often as «2» (DesignSystem → "Field taxonomy": units belong to the
 /// field, and no free-text number ever means two things).
-public nonisolated struct AddressParts: Codable, Hashable, Sendable {
+public struct AddressParts: Codable, Hashable, Sendable {
     /// Строение/корпус — the building's own sub-designation, not the way in. It maps
     /// to the wire's `building`, never folded into the address line (YD-10).
     public var building: String

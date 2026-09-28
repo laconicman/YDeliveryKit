@@ -13,7 +13,7 @@ import SQLiteData
 /// the lists below are its single source of truth (tests construct the engine through
 /// `syncEngine`, never by re-listing tables). Extension targets share this same code —
 /// they read and write but never call ``startSync()`` (the engine stays lazy).
-public nonisolated final class AppDatabase: Sendable {
+public final class AppDatabase: Sendable {
     public static let filename = "ydelivery.sqlite"
 
     private static let logger = Logger(
@@ -1151,7 +1151,7 @@ public nonisolated final class AppDatabase: Sendable {
     // MARK: - Pending acceptances (device tier) — YD-5's durable half
 
     /// What a drain can still do with a pending row.
-    public nonisolated enum PendingAcceptanceOutcome {
+    public enum PendingAcceptanceOutcome {
         /// The card answered nothing yet — stay pending, stamp the check.
         case checked
         /// The claim materialized — link the order it became; a resolution
@@ -1166,7 +1166,7 @@ public nonisolated final class AppDatabase: Sendable {
     /// of the ordering flow's `unresolved` state. Only `state = 'pending'` rows
     /// with a claim id surface here; a `nil`-claimID row (a create whose answer
     /// was lost before the id was known) is audit-only — nothing can fetch it.
-    public nonisolated struct PendingAcceptance: Hashable, Sendable {
+    public struct PendingAcceptance: Hashable, Sendable {
         public let claimID: String
         /// When the loss was recorded — the drain's staleness measure.
         public let createdAt: Date
