@@ -7,9 +7,10 @@
 // environment? (The wiki once quoted the corollary as the test; it is the consequence,
 // not the criterion.)
 //
-// The Swift settings mirror the app target (project.yml): same language mode, MainActor
-// default isolation, and the Approachable Concurrency features the app compiles with —
-// one concurrency dialect across app and package.
+// The Swift settings differ by target — one dialect each, the split being the point:
+// `YDeliveryKit` (views, colors, tokens) mirrors the app's MainActor default and
+// Approachable Concurrency features; `YDeliveryData` (models, persistence) is
+// `.defaultIsolation(nil)` — library code picks no executor for its callers.
 import PackageDescription
 
 let package = Package(

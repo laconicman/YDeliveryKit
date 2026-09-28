@@ -38,6 +38,16 @@ extension Bundle {
                 return bundle
             }
         }
+        // Framework-packaged hosts keep the resource bundle beside *YDeliveryKit*,
+        // a module this file cannot anchor to — the anchor lives here, in the data
+        // target, and its bundle is the wrong neighbour. Sweep every loaded bundle
+        // and framework for a nested copy before giving up.
+        for bundle in Bundle.allBundles + Bundle.allFrameworks where bundle != Bundle.main {
+            if let url = bundle.url(forResource: bundleName, withExtension: "bundle"),
+               let found = Bundle(url: url) {
+                return found
+            }
+        }
         fatalError("unable to find bundle named \(bundleName)")
     }()
 }

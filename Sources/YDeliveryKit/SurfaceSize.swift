@@ -5,6 +5,6 @@ import Foundation
 /// the content takes the size instead. `compact` is the irreducible form —
 /// glyph or bare words; `regular` is the app's default reading; `expanded`
 /// adds the supporting detail a Lock Screen or StandBy layout can hold.
-public enum SurfaceSize: Sendable, Hashable {
+public nonisolated enum SurfaceSize: Sendable, Hashable {
     case compact, regular, expanded
 }
