@@ -33,6 +33,11 @@ public struct StatusTimeline: View {
         /// Phrased events, oldest first, with consecutive repeats of one status
         /// folded into the first sighting — the journal and a search pass can both
         /// report the same word, and the trail says it once.
+        ///
+        /// Lives beside the view, not in `YDeliveryData`: the output is a rendering
+        /// choice (a `LocalizedStringResource`, a status glyph), while the pure input
+        /// — `ProviderStatusPhrase` — already sits in the data target. The day a
+        /// non-UI consumer (a snapshot renderer) needs the fold, it moves down.
         public static func entries(from events: [ProviderEvent]) -> [Entry] {
             var out: [Entry] = []
             var lastStatus: String?
