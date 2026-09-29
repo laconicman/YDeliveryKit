@@ -108,7 +108,9 @@ public struct StatusTimeline: View {
         let calendar = displayCalendar
         let at = entries[index].at
         let previous = index == 0 ? Date.now : entries[index - 1].at
-        let sameYear = calendar.component(.year, from: at) == calendar.component(.year, from: previous)
+        // Granularity, not the year number: a calendar with eras (Japanese) reuses
+        // year numbers across them, and the compare must see the era too.
+        let sameYear = calendar.isDate(at, equalTo: previous, toGranularity: .year)
         if index > 0, calendar.isDate(at, inSameDayAs: previous) { return .time }
         return sameYear ? .day : .dayAndYear
     }
