@@ -68,6 +68,18 @@ public struct StatusTimeline: View {
 
     public let entries: [Entry]
 
+    /// The day and year turns are decided in the calendar and zone the rows are
+    /// *formatted* in — the view's environment, not the device's — so a change
+    /// that renders as «00:30» on a new day is labelled as one (review, Kit #30).
+    @Environment(\.calendar) private var calendar
+    @Environment(\.timeZone) private var timeZone
+
+    private var displayCalendar: Calendar {
+        var calendar = calendar
+        calendar.timeZone = timeZone
+        return calendar
+    }
+
     public init(entries: [Entry]) {
         self.entries = entries
     }
@@ -81,28 +93,49 @@ public struct StatusTimeline: View {
             VStack(alignment: .leading, spacing: Layout.Spacing.tight) {
                 ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
                     row(entry, isLatest: index == entries.count - 1,
-                        newDay: index == 0 || !Calendar.current.isDate(
-                            entry.at, inSameDayAs: entries[index - 1].at))
+                        stamp: stamp(at: index))
                 }
+            }
+        }
+    }
+
+    /// How much of the date a row says. Every row has the time; the first row and
+    /// every row whose day differs from the one above add the day — two «14:30» a
+    /// day apart stay apart — and a row whose *year* differs from the one above
+    /// (or, for the first row, from today) adds the year, so a trail that
+    /// outlives a calendar never shows two «2 Jan 12:00» twelve months apart.
+    private func stamp(at index: Int) -> Stamp {
+        let calendar = displayCalendar
+        let at = entries[index].at
+        let previous = index == 0 ? Date.now : entries[index - 1].at
+        let sameYear = calendar.component(.year, from: at) == calendar.component(.year, from: previous)
+        if index > 0, calendar.isDate(at, inSameDayAs: previous) { return .time }
+        return sameYear ? .day : .dayAndYear
+    }
+
+    private enum Stamp {
+        case time, day, dayAndYear
+
+        var format: Date.FormatStyle {
+            switch self {
+            case .time: .dateTime.hour().minute()
+            case .day: .dateTime.day().month(.abbreviated).hour().minute()
+            case .dayAndYear: .dateTime.day().month(.abbreviated).year().hour().minute()
             }
         }
     }
 
     /// One change. Each row is its own accessibility element (words, then time),
     /// so VoiceOver walks the trail change by change — `RouteLine` combines at
-    /// the row, never the whole line, and this follows it. A trail that spans
-    /// days says the day where it turns: the first row always, then every row
-    /// whose day differs from the one above — two «14:30» a day apart stay apart.
-    private func row(_ entry: Entry, isLatest: Bool, newDay: Bool) -> some View {
+    /// the row, never the whole line, and this follows it.
+    private func row(_ entry: Entry, isLatest: Bool, stamp: Stamp) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: Layout.Spacing.unit) {
             mark(for: entry, isLatest: isLatest)
                 .frame(width: Self.markColumn)
             Text(entry.words)
                 .fontWeight(isLatest ? .medium : .regular)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Text(entry.at, format: newDay
-                 ? .dateTime.day().month(.abbreviated).hour().minute()
-                 : .dateTime.hour().minute())
+            Text(entry.at, format: stamp.format)
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
         }
