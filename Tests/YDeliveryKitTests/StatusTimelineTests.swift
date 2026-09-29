@@ -1,0 +1,71 @@
+import Foundation
+import Testing
+@testable import YDeliveryKit
+
+/// The trail's derivation — the pure half of `StatusTimeline`: ordering, folding,
+/// phrasing, and which words close it.
+@Suite("Status timeline")
+@MainActor
+struct StatusTimelineTests {
+    private let order = UUID()
+    private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+
+    private func event(_ status: String, at offset: TimeInterval, id: Int64? = nil,
+                       source: String = "journal") -> ProviderEvent {
+        ProviderEvent(orderID: order, providerEventID: id, at: t0 + offset,
+                      kind: "status", providerStatus: status, source: source)
+    }
+
+    @Test("Entries come oldest first whatever order the events arrive in")
+    func sortsByTime() {
+        let entries = StatusTimeline.Entry.entries(from: [
+            event("pickuped", at: 900, id: 2),
+            event("accepted", at: 0, id: 1),
+        ])
+        #expect(entries.map(\.at) == [t0, t0 + 900])
+    }
+
+    @Test("A status the journal and a search both report is one line — the first sighting's")
+    func foldsConsecutiveRepeats() {
+        let entries = StatusTimeline.Entry.entries(from: [
+            event("accepted", at: 0, id: 1),
+            event("pickuped", at: 900, id: 2),
+            event("pickuped", at: 960, source: "search"),
+            event("delivery_arrived", at: 2_000, id: 3),
+        ])
+        #expect(entries.count == 3)
+        #expect(entries[1].at == t0 + 900, "the fold keeps the earliest time, not the re-sighting's")
+    }
+
+    @Test("A status returning after another is its own line — only *consecutive* repeats fold")
+    func keepsNonConsecutiveRepeats() {
+        let entries = StatusTimeline.Entry.entries(from: [
+            event("performer_lookup", at: 0, id: 1),
+            event("performer_found", at: 100, id: 2),
+            event("performer_lookup", at: 200, id: 3),
+        ])
+        #expect(entries.count == 3)
+    }
+
+    @Test("Events without a status word are not lines")
+    func skipsStatuslessEvents() {
+        let price = ProviderEvent(orderID: order, providerEventID: 9, at: t0, kind: "price",
+                                  detail: "1200", source: "journal")
+        #expect(StatusTimeline.Entry.entries(from: [price]).isEmpty)
+    }
+
+    @Test("Only delivered and cancelled close the trail")
+    func terminalWords() {
+        #expect(StatusTimeline.Entry.terminalStatus(for: "delivered_finish") == .done)
+        #expect(StatusTimeline.Entry.terminalStatus(for: "cancelled_with_payment") == .cancelled)
+        #expect(StatusTimeline.Entry.terminalStatus(for: "returned") == nil, "a returned parcel is a decision, not an ending")
+        #expect(StatusTimeline.Entry.terminalStatus(for: "performer_not_found") == nil)
+    }
+
+    @Test("An unknown wire word keeps its time and never reaches the row raw")
+    func unknownWordIsPhrased() {
+        let entries = StatusTimeline.Entry.entries(from: [event("some_future_status", at: 0, id: 1)])
+        #expect(entries.count == 1)
+        #expect(String(localized: entries[0].words) == "Status updated")
+    }
+}
