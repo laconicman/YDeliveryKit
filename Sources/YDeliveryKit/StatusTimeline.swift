@@ -30,9 +30,11 @@ public struct StatusTimeline: View {
             self.terminal = terminal
         }
 
-        /// Phrased events, oldest first, with consecutive repeats of one status
+        /// Phrased events, oldest first, with consecutive repeats of one *phrase*
         /// folded into the first sighting — the journal and a search pass can both
-        /// report the same word, and the trail says it once.
+        /// report the same word, and `new` → `estimating` → `accepted` are three wire
+        /// words for one thing the reader is told («Placing the order»); the trail
+        /// says it once, at the time it first became true.
         ///
         /// Lives beside the view, not in `YDeliveryData`: the output is a rendering
         /// choice (a `LocalizedStringResource`, a status glyph), while the pure input
@@ -40,15 +42,16 @@ public struct StatusTimeline: View {
         /// non-UI consumer (a snapshot renderer) needs the fold, it moves down.
         public static func entries(from events: [ProviderEvent]) -> [Entry] {
             var out: [Entry] = []
-            var lastStatus: String?
+            var lastPhrase: String?
             for event in events.sorted(by: { $0.at < $1.at }) {
                 guard let status = event.providerStatus else { continue }
-                if status == lastStatus { continue }
-                lastStatus = status
+                let words = ProviderStatusPhrase.phrase(for: status)
+                    ?? LocalizedStringResource("Status updated", bundle: .kit)
+                // The resource's key is the phrase's identity across locales.
+                if words.key == lastPhrase { continue }
+                lastPhrase = words.key
                 out.append(Entry(
-                    id: event.id, at: event.at,
-                    words: ProviderStatusPhrase.phrase(for: status)
-                        ?? LocalizedStringResource("Status updated", bundle: .kit),
+                    id: event.id, at: event.at, words: words,
                     terminal: Self.terminalStatus(for: status)))
             }
             return out
