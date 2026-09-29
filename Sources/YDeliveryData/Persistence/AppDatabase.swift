@@ -149,8 +149,8 @@ public final class AppDatabase: Sendable {
     }
 
     /// Why sync never started — entitlement absent or engine failed to construct or
-    /// start. Stored, not silent: a future surface can render it (same rule as the
-    /// open-failure cell above).
+    /// start. Stored, not silent: the share seam renders it (`ShareError`; same rule
+    /// as the open-failure cell above).
     public var syncStartFailure: Error? { syncFailure.withLock { $0 } }
 
     /// Starts CloudKit sync — idempotent; a second call is a no-op while running.

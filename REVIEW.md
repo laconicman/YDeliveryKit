@@ -42,8 +42,9 @@ the diff-level cues and the noise filters.
 
 ## Noise Filters
 
-- Localized strings here resolve against the package bundle via the
-  `LocalizedStringResource` kit-bundle helper — do not flag the absence of
-  `Bundle.main`-style lookups; their presence would be the defect.
+- Localized strings here resolve against the package's own bundles via the
+  `LocalizedStringResource` helpers — `.kit` for the UI target, `.data` for the
+  data target — do not flag the absence of `Bundle.main`-style lookups; their
+  presence would be the defect.
 - `Package.resolved` is committed deliberately (records the known-good SFSafeSymbols
   pin for the standalone test run); do not flag it as an accident.

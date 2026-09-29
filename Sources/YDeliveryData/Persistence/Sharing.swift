@@ -14,28 +14,60 @@ extension AppDatabase {
     /// the system's `CloudSharingView`.
     ///
     /// `sendChanges()` runs first: `share(record:)` refuses a record with no
-    /// sync metadata, so a just-placed order would otherwise fail with
-    /// "record metadata not found" until the next scheduled flush (the upstream
-    /// doc's own remedy). On a device that cannot reach iCloud the call throws
-    /// and the caller renders it — a share that never happened, not a spinner
-    /// that waits for one.
+    /// server record, so a just-placed order would otherwise fail until the next
+    /// scheduled flush (the upstream doc's own remedy). The refusals this seam
+    /// can name are named *here*, before the engine's — its `SharingError` is
+    /// private and answers every one of them with the same sentence, "The record
+    /// could not be shared." (sqlite-data `CloudKitSharing.swift`), so a caller
+    /// that renders the throw would name neither cause nor remedy. Whatever the
+    /// pre-checks cannot predict travels up wrapped in ``ShareError/refused(_:)``
+    /// — a share that never happened, not a spinner that waits for one.
     ///
     /// - Parameters:
     ///   - id: The order to share. It need not exist in the shared tier — an
-    ///     unknown id fails at the metadata lookup like an unsynced one, which
-    ///     is the honest answer for "nothing to share".
+    ///     unknown id answers like an unsynced one (``ShareError/notYetInCloud``),
+    ///     which is the honest answer for "nothing to share".
     ///   - title: The share's display name (the recipient sees it in the
     ///     invitation). Composed by the caller — presentation, not state.
+    /// - Throws: ``ShareError`` — each case names the cause it can know, with the
+    ///   remedy in `recoverySuggestion`.
     public func shareOrder(id: Order.ID, title: String) async throws -> SharedRecord {
-        try await syncEngine.sendChanges()
-        return try await syncEngine.share(
-            record: OrderRow(id: id, provider: provider)
-        ) { share in
-            share[CKShare.SystemFieldKey.title] = title
-            // Private sharing only — the contract's law (doc:Collaboration →
-            // "public sharing stays off"). A participant list, not a link for
-            // the internet.
-            share.publicPermission = .none
+        if let failure = syncStartFailure {
+            throw ShareError(syncStartFailure: failure)
+        }
+        do {
+            try await syncEngine.sendChanges()
+            // The engine's own gate, asked first: `share(record:)` throws
+            // "record metadata not found" while the row has no server record —
+            // still queued, offline, or the device was never signed in (the
+            // engine's `start()` swallows a missing account silently).
+            guard try reachedCloud(id) else { throw ShareError.notYetInCloud }
+            return try await syncEngine.share(
+                record: OrderRow(id: id, provider: provider)
+            ) { share in
+                share[CKShare.SystemFieldKey.title] = title
+                // Private sharing only — the contract's law (doc:Collaboration →
+                // "public sharing stays off"). A participant list, not a link for
+                // the internet.
+                share.publicPermission = .none
+            }
+        } catch let error as ShareError {
+            throw error
+        } catch {
+            throw ShareError.refused(error)
+        }
+    }
+
+    /// Whether iCloud holds this order's record — the engine's `share(record:)`
+    /// answer to "synced or not" is `SyncMetadata.lastKnownServerRecord`, so the
+    /// pre-check reads the same column the refusal would.
+    private func reachedCloud(_ id: Order.ID) throws -> Bool {
+        let metadataID = OrderRow(id: id, provider: provider).syncMetadataID
+        return try queue.read { db in
+            try SyncMetadata
+                .find(metadataID)
+                .select(\.lastKnownServerRecord)
+                .fetchOne(db) ?? nil != nil
         }
     }
 
@@ -100,5 +132,78 @@ extension AppDatabase {
     public func acceptShare(metadata: CKShare.Metadata) async throws {
         try await syncEngine.acceptShare(metadata: metadata)
         try await syncEngine.fetchChanges()
+    }
+
+    /// Why an order could not be shared — decided at this seam because the
+    /// engine's own refusal is a private type with one fixed sentence for every
+    /// cause (sqlite-data `SharingError`; the detail sits in a `debugDescription`
+    /// the type does not even conform `CustomDebugStringConvertible` to). A
+    /// properly filled error can be passed around and displayed as is — the
+    /// author's standing rule — so each case carries `errorDescription` for the
+    /// alert's title and `recoverySuggestion` for its remedy.
+    public enum ShareError: LocalizedError {
+        /// `startSync()` was refused before the engine ran — the iCloud
+        /// capability is absent from this build. Not a sign-in problem: no
+        /// account state repairs a missing entitlement.
+        case noICloudEntitlement
+        /// `startSync()` ran and the engine would not start — the stored
+        /// ``syncStartFailure``, carried so its own words reach the alert.
+        case syncNotStarted(any Error)
+        /// `sendChanges()` finished and the order still has no
+        /// `lastKnownServerRecord` — it never reached iCloud: queued, offline,
+        /// or never signed in. An unknown id lands here too: a row nothing
+        /// synced shares nothing.
+        case notYetInCloud
+        /// The engine's own refusal — `share(record:)` or `sendChanges()`
+        /// throwing a CloudKit/network error of its own. Its localized words
+        /// are all the public surface it offers.
+        case refused(any Error)
+
+        /// Routes the stored start failure: the one case that is a build
+        /// property, not a runtime condition, gets its own case — its remedy
+        /// differs (no account state fixes an absent entitlement).
+        init(syncStartFailure: any Error) {
+            self = if syncStartFailure as? SyncStartError == .noICloudEntitlement {
+                .noICloudEntitlement
+            } else {
+                .syncNotStarted(syncStartFailure)
+            }
+        }
+
+        public var errorDescription: String? {
+            switch self {
+            case .noICloudEntitlement, .syncNotStarted:
+                String(localized: LocalizedStringResource(
+                    "Sharing needs iCloud sync.", bundle: .data))
+            case .notYetInCloud:
+                String(localized: LocalizedStringResource(
+                    "This order has not reached iCloud yet.", bundle: .data))
+            case .refused:
+                String(localized: LocalizedStringResource(
+                    "The order could not be shared.", bundle: .data))
+            }
+        }
+
+        public var recoverySuggestion: String? {
+            switch self {
+            case .noICloudEntitlement:
+                String(localized: LocalizedStringResource(
+                    "This build cannot sync with iCloud.", bundle: .data))
+            case .syncNotStarted(let underlying):
+                String(localized: LocalizedStringResource(
+                    "This install could not start iCloud sync: \(underlying.localizedDescription).",
+                    bundle: .data))
+            case .notYetInCloud:
+                String(localized: LocalizedStringResource(
+                    """
+                    Sharing needs one successful sync. Make sure this device is signed \
+                    in to iCloud and online, then try again in a moment.
+                    """,
+                    bundle: .data))
+            case .refused(let underlying):
+                (underlying as? LocalizedError)?.recoverySuggestion
+                    ?? underlying.localizedDescription
+            }
+        }
     }
 }

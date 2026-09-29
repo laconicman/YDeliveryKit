@@ -61,6 +61,9 @@ let package = Package(
                 .product(name: "GRDB", package: "GRDB.swift"),
                 .product(name: "StructuredQueriesSQLite", package: "swift-structured-queries"),
             ],
+            // The data half's own words — the catalog its phrases resolve from,
+            // so `Bundle.data` need never reach into the UI target's bundle.
+            resources: [.process("Localizable.xcstrings")],
             swiftSettings: [
                 .defaultIsolation(nil),
                 .enableUpcomingFeature("MemberImportVisibility"),

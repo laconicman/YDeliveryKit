@@ -130,7 +130,7 @@ extension RoutePoint {
         let phone = if let contactPhoneExtension, !contactPhoneExtension.isEmpty,
                        let contactPhone, !contactPhone.isEmpty {
             String(localized: LocalizedStringResource(
-                "\(contactPhone), ext. \(contactPhoneExtension)", bundle: .kit))
+                "\(contactPhone), ext. \(contactPhoneExtension)", bundle: .data))
         } else {
             contactPhone ?? ""
         }
