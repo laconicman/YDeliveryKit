@@ -78,6 +78,12 @@ public final class AppDatabase: Sendable {
 
     private static func open(in directory: URL, providerAccountRef: String,
                              provider: String) throws -> DatabaseQueue {
+        // A directory that is not there yet is a state to create, not a failure
+        // to report: the App Group container exists by construction, but a
+        // consumer-chosen directory — a preview's or a test host's temp path —
+        // may not, and SQLite's "unable to open database file" (error 14) would
+        // dress a fresh store as an unreadable one.
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let db = try DatabaseQueue(path: directory.appendingPathComponent(filename).path)
         try db.write { db in
             try db.execute(sql: ddl)
