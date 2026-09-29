@@ -1,0 +1,110 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "%@, ext. %@" : {
+      "localizations" : {
+      }
+    },
+    "Back at the pickup point" : {
+      "localizations" : {
+      }
+    },
+    "Cancelled" : {
+      "localizations" : {
+      }
+    },
+    "Confirming delivery" : {
+      "localizations" : {
+      }
+    },
+    "Confirming pickup" : {
+      "localizations" : {
+      }
+    },
+    "Confirming the return" : {
+      "localizations" : {
+      }
+    },
+    "Couldn't price the route" : {
+      "localizations" : {
+      }
+    },
+    "Courier assigned — heading to pickup" : {
+      "localizations" : {
+      }
+    },
+    "Courier is at the destination door" : {
+      "localizations" : {
+      }
+    },
+    "Courier is at the pickup door" : {
+      "localizations" : {
+      }
+    },
+    "Delivered" : {
+      "localizations" : {
+      }
+    },
+    "Delivery failed" : {
+      "localizations" : {
+      }
+    },
+    "Heading back to the sender" : {
+      "localizations" : {
+      }
+    },
+    "Looking for a courier" : {
+      "localizations" : {
+      }
+    },
+    "No courier found" : {
+      "localizations" : {
+      }
+    },
+    "Picked up" : {
+      "localizations" : {
+      }
+    },
+    "Placing the order" : {
+      "localizations" : {
+      }
+    },
+    "Returned to the sender" : {
+      "localizations" : {
+      }
+    },
+    "Sharing needs iCloud sync." : {
+      "localizations" : {
+      }
+    },
+    "Sharing needs one successful sync. Make sure this device is signed in to iCloud and online, then try again in a moment." : {
+      "localizations" : {
+      }
+    },
+    "The order could not be shared." : {
+      "localizations" : {
+      }
+    },
+    "This build cannot sync with iCloud." : {
+      "localizations" : {
+      }
+    },
+    "This install could not start iCloud sync: %@." : {
+      "localizations" : {
+      }
+    },
+    "This order has not reached iCloud yet." : {
+      "localizations" : {
+      }
+    },
+    "Waiting for payment" : {
+      "localizations" : {
+      }
+    },
+    "Waiting for your approval" : {
+      "localizations" : {
+      }
+    }
+  },
+  "version" : "1.0"
+}
