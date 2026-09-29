@@ -37,6 +37,18 @@ struct StatusTimelineTests {
         #expect(entries[1].at == t0 + 900, "the fold keeps the earliest time, not the re-sighting's")
     }
 
+    @Test("Three wire words for one phrase are one line — the fold is on what the reader sees")
+    func foldsConsecutivePhrases() {
+        let entries = StatusTimeline.Entry.entries(from: [
+            event("new", at: 0, id: 1),
+            event("estimating", at: 40, id: 2),
+            event("accepted", at: 130, id: 3),
+            event("performer_lookup", at: 131, id: 4),
+        ])
+        #expect(entries.count == 2, "«Placing the order» once, then «Looking for a courier»")
+        #expect(entries[0].at == t0, "the phrase is stamped when it first became true")
+    }
+
     @Test("A status returning after another is its own line — only *consecutive* repeats fold")
     func keepsNonConsecutiveRepeats() {
         let entries = StatusTimeline.Entry.entries(from: [
