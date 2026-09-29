@@ -75,26 +75,35 @@ public struct StatusTimeline: View {
         if !entries.isEmpty {
             VStack(alignment: .leading, spacing: Layout.Spacing.tight) {
                 ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
-                    row(entry, isLatest: index == entries.count - 1)
+                    row(entry, isLatest: index == entries.count - 1,
+                        newDay: index == 0 || !Calendar.current.isDate(
+                            entry.at, inSameDayAs: entries[index - 1].at))
                 }
             }
-            .accessibilityElement(children: .combine)
         }
     }
 
-    private func row(_ entry: Entry, isLatest: Bool) -> some View {
+    /// One change. Each row is its own accessibility element (words, then time),
+    /// so VoiceOver walks the trail change by change — `RouteLine` combines at
+    /// the row, never the whole line, and this follows it. A trail that spans
+    /// days says the day where it turns: the first row always, then every row
+    /// whose day differs from the one above — two «14:30» a day apart stay apart.
+    private func row(_ entry: Entry, isLatest: Bool, newDay: Bool) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: Layout.Spacing.unit) {
             mark(for: entry, isLatest: isLatest)
                 .frame(width: Self.markColumn)
             Text(entry.words)
                 .fontWeight(isLatest ? .medium : .regular)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Text(entry.at, format: .dateTime.hour().minute())
+            Text(entry.at, format: newDay
+                 ? .dateTime.day().month(.abbreviated).hour().minute()
+                 : .dateTime.hour().minute())
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
         }
         .font(.footnote)
         .foregroundStyle(isLatest ? .primary : .secondary)
+        .accessibilityElement(children: .combine)
     }
 
     @ViewBuilder
@@ -137,6 +146,18 @@ public struct StatusTimeline: View {
         ProviderEvent(orderID: order, providerEventID: 1, at: t0, kind: "status", providerStatus: "accepted", source: "journal"),
         ProviderEvent(orderID: order, providerEventID: 2, at: t0 + 900, kind: "status", providerStatus: "pickuped", source: "journal"),
         ProviderEvent(orderID: order, providerEventID: 3, at: t0 + 3_000, kind: "status", providerStatus: "delivered_finish", source: "journal"),
+    ])
+    .padding()
+}
+
+#Preview("Across two days — the day shows where it turns") {
+    let monday = Date(timeIntervalSince1970: 1_800_000_000)
+    let order = UUID()
+    StatusTimeline(events: [
+        ProviderEvent(orderID: order, providerEventID: 1, at: monday, kind: "status", providerStatus: "accepted", source: "journal"),
+        ProviderEvent(orderID: order, providerEventID: 2, at: monday + 3_600, kind: "status", providerStatus: "performer_not_found", source: "journal"),
+        ProviderEvent(orderID: order, providerEventID: 3, at: monday + 86_400, kind: "status", providerStatus: "performer_lookup", source: "journal"),
+        ProviderEvent(orderID: order, providerEventID: 4, at: monday + 90_000, kind: "status", providerStatus: "performer_found", source: "journal"),
     ])
     .padding()
 }
