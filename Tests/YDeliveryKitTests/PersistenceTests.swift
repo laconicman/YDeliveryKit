@@ -1619,20 +1619,109 @@ struct PersistenceTests {
         }
     }
 
-    /// An id nothing has synced shares nothing — the engine's
-    /// metadata-not-found answer travels up rather than minting a share for a
-    /// row that does not exist.
+    /// An id nothing has synced shares nothing — "not yet in iCloud" is the
+    /// honest answer for a row that does not exist, rather than a minted share
+    /// or the engine's generic sentence (issue #70).
     @Test("An unknown order cannot be shared")
     func unknownOrderShareFails() async throws {
         let database = makeDatabase()
-        await #expect(throws: (any Error).self) {
-            try await withDependencies {
-                $0.context = .test
-            } operation: {
-                try await database.syncEngine.start()
+        try await withDependencies {
+            $0.context = .test
+        } operation: {
+            try await database.syncEngine.start()
+            do {
                 _ = try await database.shareOrder(id: UUID(), title: "T")
+                Issue.record("nothing to share must refuse, not mint")
+            } catch let error as AppDatabase.ShareError {
+                guard case .notYetInCloud = error else {
+                    Issue.record("expected .notYetInCloud, got \(error)")
+                    return
+                }
             }
         }
+    }
+
+    /// The stored start failure reaches the share ask by name — "sync never
+    /// started, and here's the stored reason" — instead of the engine's generic
+    /// sentence (issue #70). The duplicate index is the suite's standing way to
+    /// make `startSync()` fail: the engine rejects the schema.
+    @Test("A failed sync start makes shareOrder name the cause")
+    func shareOrderNamesSyncStartFailure() async throws {
+        let database = makeDatabase()
+        let order = Order(
+            created: .now, status: .active,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")],
+            claimID: "claim-share-fail")
+        try database.recordOrder(order)
+        try await database.queue.write { db in
+            try db.execute(sql: """
+                CREATE UNIQUE INDEX "shareFailDedup" ON "providerEvents"
+                  ("orderID", "providerEventID")
+                """)
+        }
+        try await withDependencies {
+            $0.context = .test
+        } operation: {
+            await database.startSync()
+            do {
+                _ = try await database.shareOrder(id: order.id, title: "T")
+                Issue.record("a share past a failed start must refuse")
+            } catch let error as AppDatabase.ShareError {
+                guard case .syncNotStarted = error else {
+                    Issue.record("expected .syncNotStarted, got \(error)")
+                    return
+                }
+                #expect(error.errorDescription?.isEmpty == false)
+                #expect(error.recoverySuggestion?.isEmpty == false,
+                        "a filled error can be displayed as is — remedy included")
+            }
+        }
+    }
+
+    /// An order never pushed — the engine never started, or the upload never
+    /// landed — reports "not yet in iCloud", which is also where a signed-out
+    /// device lands: `start()` swallows a missing account silently.
+    @Test("An unsynced order reports not-yet-in-iCloud, not a mystery")
+    func shareOrderNamesUnsyncedOrder() async throws {
+        let database = makeDatabase()
+        let order = Order(
+            created: .now, status: .active,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")],
+            claimID: "claim-share-unsynced")
+        try database.recordOrder(order)
+        try await withDependencies {
+            $0.context = .test
+        } operation: {
+            do {
+                _ = try await database.shareOrder(id: order.id, title: "T")
+                Issue.record("an order iCloud never saw must refuse")
+            } catch let error as AppDatabase.ShareError {
+                guard case .notYetInCloud = error else {
+                    Issue.record("expected .notYetInCloud, got \(error)")
+                    return
+                }
+            }
+        }
+    }
+
+    /// The engine's own refusal carries its words through — the only surface it
+    /// offers — rather than being dropped for a generic retry hint.
+    @Test("ShareError.refused forwards the underlying error's words")
+    func shareErrorRefusedForwardsUnderlying() {
+        let underlying = CocoaError(.coderInvalidValue)
+        let error = AppDatabase.ShareError.refused(underlying)
+        #expect(error.recoverySuggestion == underlying.localizedDescription)
+    }
+
+    // MARK: Strings — each half resolves its own bundle
+
+    /// The data half reads its words from `YDeliveryKit_YDeliveryData.bundle`;
+    /// an unresolvable lookup would fatalError before the expectations ran
+    /// (issue #28). The UI half's `.kit` resolves beside it — same check.
+    @Test("Both bundle descriptions resolve in the test host")
+    func bundleDescriptionsResolve() {
+        #expect(String(localized: LocalizedStringResource("Picked up", bundle: .data)) == "Picked up")
+        #expect(String(localized: LocalizedStringResource("Draft", bundle: .kit)) == "Draft")
     }
 
     /// Unsharing removes the share the metadata recorded — the affordance's
