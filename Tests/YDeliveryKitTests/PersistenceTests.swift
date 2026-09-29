@@ -27,6 +27,17 @@ struct PersistenceTests {
             containerIdentifier: "iCloud.test")
     }
 
+    @Test("A directory that does not exist yet is created, not reported")
+    func opensInAnAbsentDirectory() throws {
+        let nested = directory.appendingPathComponent("not/yet/here", isDirectory: true)
+        #expect(!FileManager.default.fileExists(atPath: nested.path))
+        let database = AppDatabase(
+            directory: nested, providerAccountRef: "test:unattributed",
+            containerIdentifier: "iCloud.test")
+        #expect(try database.readOrders().isEmpty, "a fresh store reads empty — never SQLite error 14")
+        #expect(FileManager.default.fileExists(atPath: nested.path))
+    }
+
     // MARK: Schema validation — the contract's DDL against SyncEngine.init
 
     /// `.test` context swaps the engine's CloudKit state for a mock — no container
