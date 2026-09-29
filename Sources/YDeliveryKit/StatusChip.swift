@@ -90,7 +90,11 @@ extension OrderStatus {
         case .active: .recordCircle
         case .done: .checkmark
         case .attention: .exclamationmarkTriangleFill
-        case .cancelled: .xmark
+        // Circled: a bare ✕ at a pill's leading edge is a dismiss control, and the
+        // history rows read «✕ Cancelled» as a close button (author, 2026-09-29).
+        // The ring makes it a status mark; the X inside still separates it from
+        // draft in grayscale.
+        case .cancelled: .xmarkCircle
         }
     }
 
