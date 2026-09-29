@@ -160,6 +160,12 @@ public struct RouteLine: View {
         .onTapGesture {
             selection?.wrappedValue = index
         }
+        // Without a binding the rows are inert, and the tap belongs to whatever
+        // wraps the line — the history list's `NavigationLink` row. A gesture
+        // that fires into a nil binding still *claims* the touch, so the row
+        // opened nothing wherever the addresses were tapped (YDelivery, the
+        // history-screenshot pass, 2026-09-29).
+        .allowsHitTesting(selection != nil)
     }
 }
 
