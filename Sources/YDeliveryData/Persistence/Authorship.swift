@@ -29,6 +29,17 @@ extension AppDatabase {
         /// Whether the modifier is the share's owner — `nil` where no share
         /// exists to ask (a private order's writer is the owner by absence).
         public var modifierIsOwner: Bool?
+
+        /// The empty attribution — nothing synced, nothing discloses.
+        public init(
+            creatorRecordName: String? = nil, modifierRecordName: String? = nil,
+            modifierName: String? = nil, modifierIsOwner: Bool? = nil
+        ) {
+            self.creatorRecordName = creatorRecordName
+            self.modifierRecordName = modifierRecordName
+            self.modifierName = modifierName
+            self.modifierIsOwner = modifierIsOwner
+        }
     }
 
     /// The provider mirror's authorship — the "recorded by" the detail surface

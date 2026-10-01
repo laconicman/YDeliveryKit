@@ -17,9 +17,17 @@ the diff-level cues and the noise filters.
 - Flag a public API removal or rename that is not paired with a version-note in the PR
   description — consumers pin tags (`minorVersion` while 0.x), so source breaks are
   minor bumps, stated, never slipped.
-- Flag an import of anything beyond Foundation / SwiftUI / SFSafeSymbols. A new
-  dependency here taxes every consumer and needs the README's membership argument made
-  explicitly.
+- Flag an import of anything beyond Foundation / SwiftUI / SFSafeSymbols / CryptoKit /
+  Security / CloudKit. A new dependency here taxes every consumer and needs the
+  README's membership argument made explicitly.
+- Record signing invariants (see `Persistence/RecordSigning.swift`): signature
+  columns are base64 `TEXT`, never `Data` (a `Data` column maps to a `CKAsset` —
+  an asset round-trip per row for 64 bytes); rows sign **inside** the write
+  transaction, after the final persisted values are known; reads verify and attach a
+  `SignatureVerdict` but never refuse a row — a bad signature renders, it does not
+  throw or drop. The `ownerKeyPins` table stays device-tier: it is this reader's
+  memory, and registering it with the sync engine would let a writer re-pin a key
+  the pin exists to catch.
 
 ## Conventions
 
