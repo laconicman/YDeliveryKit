@@ -79,6 +79,7 @@ struct RouteStopRow: Identifiable {
     var latitude = 0.0
     var longitude = 0.0
     var address = ""
+    var building: String?
     var entrance: String?
     var floor: String?
     var apartment: String?
@@ -223,6 +224,7 @@ struct SavedPlaceRow: Identifiable {
     var latitude = 0.0
     var longitude = 0.0
     var address = ""
+    var building: String?
     var entrance: String?
     var floor: String?
     var apartment: String?
@@ -362,6 +364,7 @@ struct DraftStopRow: Identifiable {
     var latitude: Double?
     var longitude: Double?
     var address: String?
+    var building: String?
     var entrance: String?
     var floor: String?
     var apartment: String?
