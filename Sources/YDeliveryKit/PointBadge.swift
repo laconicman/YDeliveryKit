@@ -95,7 +95,7 @@ public struct PointBadge: View {
     }
 }
 
-extension PointBadge.Role {
+nonisolated extension PointBadge.Role {
     /// The board's grayscale test, as a type: every role must stay distinguishable with
     /// color removed, so the (shape, glyph) pair — not the color — is what varies.
     nonisolated enum Shape: Hashable {
@@ -169,13 +169,13 @@ extension PointBadge.Role {
     /// clever reuse (DesignSystem → the two-entries rule).
     var color: Color {
         switch self {
-        case .start: Color(.pointStart)
-        case .stop: Color(.pointMid)
-        case .end: Color(.pointEnd)
-        case .returnPoint: Color(.placeReturn)
-        case .warehouse: Color(.placeWarehouse)
-        case .staffedPickup: Color(.placePickup)
-        case .locker: Color(.placeLocker)
+        case .start: Color(.kitPointStart)
+        case .stop: Color(.kitPointMid)
+        case .end: Color(.kitPointEnd)
+        case .returnPoint: Color(.kitPlaceReturn)
+        case .warehouse: Color(.kitPlaceWarehouse)
+        case .staffedPickup: Color(.kitPlacePickup)
+        case .locker: Color(.kitPlaceLocker)
         }
     }
 
