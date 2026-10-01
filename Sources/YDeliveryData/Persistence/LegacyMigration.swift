@@ -172,14 +172,14 @@ enum LegacyMigration {
         let p = place.point
         try db.execute(sql: """
             INSERT OR IGNORE INTO "savedPlaces"
-              ("id", "name", "kind",
+              ("id", "name", "kind", "pinned",
                "latitude", "longitude", "address",
                "entrance", "floor", "apartment", "intercom",
                "contactName", "contactGivenName", "contactFamilyName",
                "contactPhone", "contactPhoneExtension")
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, arguments: AppDatabase.args([
-                place.id, place.name, place.kind.rawValue,
+                place.id, place.name, place.kind.rawValue, place.pinned,
                 p.latitude, p.longitude, p.address,
                 p.addressParts?.entrance,
                 p.addressParts?.floor,

@@ -136,6 +136,7 @@ public final class AppDatabase: Sendable {
                             OrderAttachmentRow.self, AttachmentBlobRow.self,
                         privateTables: ProviderAccountRow.self, OrderPrivateStateRow.self,
                             SavedPlaceRow.self, CustomFieldDefinitionRow.self,
+                            ParcelTemplateRow.self, ParcelTemplateItemRow.self,
                         containerIdentifier: containerIdentifier,
                         startImmediately: false,
                         logger: Logger(
@@ -639,15 +640,17 @@ public final class AppDatabase: Sendable {
 
     // MARK: - Saved places
 
+    /// Pinned places lead the chip row, the rest keep insertion order (the
+    /// sender's-library ruling — pin ≈ favourite, doc:Roadmap).
     public func readPlaces() throws -> [SavedPlace] {
         try queue.read { db in
             try Row.fetchAll(db, sql: """
-                SELECT * FROM "savedPlaces" ORDER BY "rowid"
+                SELECT * FROM "savedPlaces" ORDER BY "pinned" DESC, "rowid"
                 """).map { row in
                 SavedPlace(
                     id: row["id"], name: row["name"],
                     kind: SavedPlace.Kind(rawValue: row["kind"]) ?? .other,
-                    point: Self.routePoint(row))
+                    point: Self.routePoint(row), pinned: row["pinned"])
             }
         }
     }
@@ -680,18 +683,21 @@ public final class AppDatabase: Sendable {
                 Self.routePoint($0).destinationKey == place.point.destinationKey
             }) {
                 place.id = match["id"]
+                // The remembered door keeps its own curation: re-saving the same
+                // destination under another name is not an unpin.
+                place.pinned = match["pinned"] ?? place.pinned
             }
             let p = place.point
             try db.execute(sql: """
                 INSERT OR REPLACE INTO "savedPlaces"
-                  ("id", "name", "kind",
+                  ("id", "name", "kind", "pinned",
                    "latitude", "longitude", "address",
                    "building", "entrance", "floor", "apartment", "intercom",
                    "contactName", "contactGivenName", "contactFamilyName",
                    "contactPhone", "contactPhoneExtension")
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, arguments: Self.args([
-                    place.id, place.name, place.kind.rawValue,
+                    place.id, place.name, place.kind.rawValue, place.pinned,
                     p.latitude, p.longitude, p.address,
                     p.addressParts?.building,
                     p.addressParts?.entrance,
@@ -704,6 +710,97 @@ public final class AppDatabase: Sendable {
                     p.contactPhone,
                     p.contactPhoneExtension,
                 ]))
+        }
+    }
+
+    // MARK: - Parcel templates — the sender's library (doc:Roadmap)
+
+    /// The template list as pickers read it — pinned entries lead, the rest keep
+    /// insertion order (``readPlaces``' rule). Items ride one grouped read in
+    /// `position` order; a template whose items are missing reads empty rather
+    /// than dropping the entry.
+    public func readParcelTemplates() throws -> [ParcelTemplate] {
+        try queue.read { db in
+            let items = try Row.fetchAll(db, sql: """
+                SELECT * FROM "parcelTemplateItems" ORDER BY "templateID", "position"
+                """).reduce(into: [UUID: [ParcelTemplate.Item]]()) { grouped, row in
+                let templateID: UUID = row["templateID"]
+                grouped[templateID, default: []].append(ParcelTemplate.Item(
+                    id: row["id"], name: row["name"], quantity: row["quantity"],
+                    weightKg: row["weightKg"], cost: row["cost"],
+                    currency: row["currency"],
+                    sizeLengthCm: row["sizeLengthCm"],
+                    sizeWidthCm: row["sizeWidthCm"],
+                    sizeHeightCm: row["sizeHeightCm"]))
+            }
+            return try Row.fetchAll(db, sql: """
+                SELECT * FROM "parcelTemplates" ORDER BY "pinned" DESC, "rowid"
+                """).map { row in
+                ParcelTemplate(
+                    id: row["id"], name: row["name"], pinned: row["pinned"],
+                    items: items[row["id"]] ?? [])
+            }
+        }
+    }
+
+    /// Keeps a template — the root upserted, its items rewritten wholesale: a
+    /// template is a document, not a delta (the draft-save discipline). Children
+    /// die explicitly — `PRAGMA foreign_keys` is off, so CASCADE never fires.
+    public func saveParcelTemplate(_ template: ParcelTemplate) throws {
+        try queue.write { db in
+            try db.execute(sql: """
+                INSERT OR REPLACE INTO "parcelTemplates" ("id", "name", "pinned")
+                VALUES (?, ?, ?)
+                """, arguments: Self.args([template.id, template.name, template.pinned]))
+            try db.execute(
+                sql: "DELETE FROM \"parcelTemplateItems\" WHERE \"templateID\" = ?",
+                arguments: Self.args([template.id]))
+            for (position, item) in template.items.enumerated() {
+                try db.execute(sql: """
+                    INSERT INTO "parcelTemplateItems"
+                      ("id", "templateID", "position", "name", "quantity",
+                       "weightKg", "cost", "currency",
+                       "sizeLengthCm", "sizeWidthCm", "sizeHeightCm")
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, arguments: Self.args([
+                        item.id, template.id, position, item.name, item.quantity,
+                        item.weightKg, item.cost, item.currency,
+                        item.sizeLengthCm, item.sizeWidthCm, item.sizeHeightCm,
+                    ]))
+            }
+        }
+    }
+
+    /// Forgets a template — unknown ids delete nothing and succeed, as
+    /// ``deletePlace`` rules. Items go first: CASCADE never fires with the
+    /// pragma off, so an unswept child would read as a library row with no home.
+    public func deleteParcelTemplate(id: ParcelTemplate.ID) throws {
+        try queue.write { db in
+            try db.execute(
+                sql: "DELETE FROM \"parcelTemplateItems\" WHERE \"templateID\" = ?",
+                arguments: Self.args([id]))
+            try db.execute(
+                sql: "DELETE FROM \"parcelTemplates\" WHERE \"id\" = ?",
+                arguments: Self.args([id]))
+        }
+    }
+
+    /// Pins or unpins a place — the Library's toggle writes nothing else; an
+    /// edit re-saves through ``savePlace``.
+    public func setPlacePinned(id: SavedPlace.ID, pinned: Bool) throws {
+        try queue.write { db in
+            try db.execute(
+                sql: "UPDATE \"savedPlaces\" SET \"pinned\" = ? WHERE \"id\" = ?",
+                arguments: Self.args([pinned, id]))
+        }
+    }
+
+    /// Same flag on a template — pinned entries lead the draft's chip row.
+    public func setParcelTemplatePinned(id: ParcelTemplate.ID, pinned: Bool) throws {
+        try queue.write { db in
+            try db.execute(
+                sql: "UPDATE \"parcelTemplates\" SET \"pinned\" = ? WHERE \"id\" = ?",
+                arguments: Self.args([pinned, id]))
         }
     }
 

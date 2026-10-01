@@ -925,6 +925,220 @@ struct PersistenceTests {
                 "adoption keeps one row and takes the newest words")
     }
 
+    // MARK: The sender's library — templates and pins
+
+    @Test("A template round-trips with its items in position order")
+    func templateRoundTrips() throws {
+        let database = makeDatabase()
+        let template = ParcelTemplate(name: "Коробка учебников", pinned: true, items: [
+            .init(name: "Учебники", quantity: 5, weightKg: 12, cost: "2500.00",
+                  currency: "RUB", sizeLengthCm: 30, sizeWidthCm: 21, sizeHeightCm: 8),
+            // The schema admits a bundle even though the v1 editor writes one —
+            // position order is the contract this pins down.
+            .init(name: "Тетради", quantity: 10, currency: "RUB"),
+        ])
+
+        try database.saveParcelTemplate(template)
+        let stored = try #require(database.readParcelTemplates().first)
+
+        #expect(stored.id == template.id)
+        #expect(stored.name == "Коробка учебников")
+        #expect(stored.pinned)
+        #expect(stored.items.map(\.name) == ["Учебники", "Тетради"],
+                "items ride back in position order")
+        #expect(stored.items[0].cost == "2500.00")
+        #expect(stored.items[0].sizeLengthCm == 30)
+        #expect(stored.items[1].quantity == 10)
+    }
+
+    /// Children mirror the draft-save discipline: a template is a document, not
+    /// a delta — a re-save with fewer items must not leave the old ones behind.
+    @Test("A re-save rewrites a template's items wholesale")
+    func templateSaveReplacesItems() throws {
+        let database = makeDatabase()
+        var template = ParcelTemplate(name: "Комплект", items: [
+            .init(name: "А", currency: "RUB"),
+            .init(name: "Б", currency: "RUB"),
+        ])
+        try database.saveParcelTemplate(template)
+
+        template.items = [.init(name: "В", currency: "RUB")]
+        template.name = "Комплект В"
+        try database.saveParcelTemplate(template)
+
+        let stored = try #require(database.readParcelTemplates().first)
+        #expect(stored.name == "Комплект В")
+        #expect(stored.items.map(\.name) == ["В"])
+        let orphans = try database.queue.read {
+            try Int.fetchOne($0, sql: """
+                SELECT COUNT(*) FROM "parcelTemplateItems" WHERE "name" != 'В'
+                """)!
+        }
+        #expect(orphans == 0, "removed items die with the rewrite — no strays")
+    }
+
+    @Test("Forgetting a template takes its items; forgetting twice succeeds")
+    func deleteTemplateSweepsItems() throws {
+        let database = makeDatabase()
+        try withDependencies {
+            $0.context = .test
+        } operation: {
+            _ = try database.syncEngine
+        }
+        let template = ParcelTemplate(name: "Коробка", items: [
+            .init(name: "А", currency: "RUB"),
+        ])
+        try database.saveParcelTemplate(template)
+
+        try database.deleteParcelTemplate(id: template.id)
+        #expect(try database.readParcelTemplates().isEmpty)
+        let leftItems = try database.queue.read {
+            try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM \"parcelTemplateItems\"")!
+        }
+        #expect(leftItems == 0,
+                "children die explicitly — the pragma is off, CASCADE never fires")
+
+        // The tombstone is the sync contract: a deleted synced row marks its
+        // metadata `_isDeleted` so the removal uploads — child rows included.
+        let tombstones = try database.queue.read {
+            try Int.fetchOne($0, sql: """
+                SELECT COUNT(*) FROM "sqlitedata_icloud"."sqlitedata_icloud_metadata"
+                WHERE "_isDeleted" = 1
+                """)!
+        }
+        #expect(tombstones == 2, "root and item each leave a deletion tombstone")
+
+        try database.deleteParcelTemplate(id: template.id)
+        try database.deleteParcelTemplate(id: UUID())
+    }
+
+    /// The pin is curation, not content: it leads both pickers, and re-saving a
+    /// remembered door under another name keeps the memory's pin — an adopt is
+    /// not an unpin.
+    @Test("Pinned entries lead both lists; adoption keeps the pin")
+    func pinnedLeadsAndSurvivesAdoption() throws {
+        let database = makeDatabase()
+        let first = SavedPlace(
+            name: "Дом", kind: .home,
+            point: RoutePoint(latitude: 55, longitude: 37, address: "Тверская, 6"))
+        let second = SavedPlace(
+            name: "Склад", kind: .warehouse,
+            point: RoutePoint(latitude: 59, longitude: 30, address: "Невский, 100"))
+        try database.savePlace(first)
+        try database.savePlace(second)
+
+        let oldTemplate = ParcelTemplate(name: "Старый", items: [
+            .init(name: "А", currency: "RUB")])
+        let newTemplate = ParcelTemplate(name: "Новый", items: [
+            .init(name: "Б", currency: "RUB")])
+        try database.saveParcelTemplate(oldTemplate)
+        try database.saveParcelTemplate(newTemplate)
+
+        // Unpinned state reads in insertion order.
+        #expect(try database.readPlaces().map(\.name) == ["Дом", "Склад"])
+        #expect(try database.readParcelTemplates().map(\.name) == ["Старый", "Новый"])
+
+        try database.setPlacePinned(id: first.id, pinned: true)
+        try database.setParcelTemplatePinned(id: newTemplate.id, pinned: true)
+
+        #expect(try database.readPlaces().map(\.name) == ["Дом", "Склад"],
+                "pinned-first: Дом was already first and stays")
+        #expect(try database.readParcelTemplates().map(\.name) == ["Новый", "Старый"],
+                "the pinned template leads despite being newer")
+
+        // Re-saving the pinned door's destination adopts id *and* pin.
+        try database.savePlace(SavedPlace(
+            name: "Дом (черный вход)", kind: .home,
+            point: RoutePoint(latitude: 55, longitude: 37, address: "Тверская, 6")))
+        let places = try database.readPlaces()
+        #expect(places.count == 2)
+        #expect(places.first?.name == "Дом (черный вход)" && places.first?.pinned == true,
+                "the adopted row keeps its pin through a re-save")
+    }
+
+    /// The tier split made observable, again: a library row syncs to the owner's
+    /// private zone — a footprint exists — and is never part of a share.
+    @Test("A template write leaves a private footprint, never shared")
+    func templateWritesLeavePrivateMetadata() throws {
+        let database = makeDatabase()
+        try withDependencies {
+            $0.context = .test
+        } operation: {
+            _ = try database.syncEngine
+        }
+        try database.saveParcelTemplate(ParcelTemplate(name: "Коробка", items: [
+            .init(name: "А", currency: "RUB"),
+        ]))
+
+        let names = try syncedRecordNames(database)
+        #expect(names.contains { $0.hasSuffix(":parcelTemplates") })
+        #expect(names.contains { $0.hasSuffix(":parcelTemplateItems") },
+                "the items child syncs privately beside its root")
+    }
+
+    /// A database born before the library gains `pinned` by the guarded ALTER —
+    /// the pragma check, not luck; its rows read unpinned.
+    @Test("A pre-pin savedPlaces table gains the column, places kept")
+    func placePinMigrates() throws {
+        let raw = try DatabaseQueue(
+            path: directory.appendingPathComponent(AppDatabase.filename).path)
+        try raw.write { db in
+            try db.execute(sql: """
+                CREATE TABLE "savedPlaces" (
+                  "id" TEXT PRIMARY KEY NOT NULL,
+                  "name" TEXT NOT NULL, "kind" TEXT NOT NULL,
+                  "latitude" REAL NOT NULL, "longitude" REAL NOT NULL,
+                  "address" TEXT NOT NULL,
+                  "building" TEXT,
+                  "entrance" TEXT, "floor" TEXT, "apartment" TEXT,
+                  "intercom" TEXT,
+                  "contactName" TEXT, "contactGivenName" TEXT,
+                  "contactFamilyName" TEXT,
+                  "contactPhone" TEXT, "contactPhoneExtension" TEXT
+                ) STRICT;
+                INSERT INTO "savedPlaces"
+                  ("id", "name", "kind", "latitude", "longitude", "address")
+                VALUES ('00000000-0000-0000-0000-0000000000d1',
+                        'Дом', 'home', 55, 37, 'Тверская, 6');
+                """)
+        }
+
+        let database = makeDatabase()
+        let columns = try database.queue.read { db in
+            try String.fetchAll(db, sql: """
+                SELECT "name" FROM pragma_table_info('savedPlaces')
+                """)
+        }
+        #expect(columns.contains("pinned"), "the late column arrived by ALTER")
+
+        let stored = try #require(database.readPlaces().first)
+        #expect(stored.name == "Дом" && !stored.pinned,
+                "a pre-pin row survives and reads unpinned")
+
+        // Reopening is a no-op — the pragma guard absorbs the repeat.
+        _ = try makeDatabase().queue.read { db in
+            try String.fetchAll(db, sql: """
+                SELECT "name" FROM pragma_table_info('savedPlaces')
+                """)
+        }
+    }
+
+    /// The file-store contract: `places.json`/`saved-places.json` written before
+    /// the flag carry no `pinned` key — a synthesized `decode` would read that
+    /// as corruption and rescue bytes that were never wrong.
+    @Test("A place blob written before the flag decodes unpinned, not corrupt")
+    func legacyPlaceBlobDecodesUnpinned() throws {
+        let json = """
+            [{"id":"00000000-0000-0000-0000-0000000000d2","name":"Склад",
+              "kind":"warehouse",
+              "point":{"latitude":59,"longitude":30,"address":"Невский, 100"}}]
+            """
+        let places = try JSONDecoder().decode([SavedPlace].self, from: Data(json.utf8))
+        #expect(places.first?.name == "Склад")
+        #expect(places.first?.pinned == false,
+                "absent reads as unpinned — the AddressParts rule")
+    }
+
     // MARK: Sync state
 
     @Test("The sync state round-trips and clears at the identity boundary")
