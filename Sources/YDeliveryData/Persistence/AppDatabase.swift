@@ -424,8 +424,11 @@ public final class AppDatabase: Sendable {
         // The signer is decided before the write transaction: a participant's
         // app writing into a foreign share zone signs nothing — its rows land
         // unsigned, which readers flag. `isLocallyOwnedZone` must not run inside
-        // `queue.write` (its `syncEngine` touch would re-enter the queue).
-        let signer = isLocallyOwnedZone(orderID: order.id) ? signatory : nil
+        // `queue.write` (its `syncEngine` touch would re-enter the queue), and
+        // it only runs when a signatory exists — an unsigned store never needs
+        // the engine's answer, and constructing the engine here races sibling
+        // databases on the same file (metadatabase attach during their writes).
+        let signer = signatory.flatMap { isLocallyOwnedZone(orderID: order.id) ? $0 : nil }
         try queue.write { db in
             if let stamp = providerObservedAt?.timeIntervalSince1970,
                try Bool.fetchOne(db, sql: """
@@ -944,9 +947,10 @@ public final class AppDatabase: Sendable {
     /// the status's own. `lastActivityAt` moves forward only.
     @discardableResult
     public func recordProviderEvent(_ event: ProviderEvent) throws -> ProviderEventOutcome {
-        // Same gate as `recordOrder`: outside the write transaction, and a
-        // foreign-zone write signs nothing — readers flag the unsigned row.
-        let signer = isLocallyOwnedZone(orderID: event.orderID) ? signatory : nil
+        // Same gate as `recordOrder`: outside the write transaction, a
+        // foreign-zone write signs nothing — readers flag the unsigned row —
+        // and no signatory means the engine's answer cannot change the write.
+        let signer = signatory.flatMap { isLocallyOwnedZone(orderID: event.orderID) ? $0 : nil }
         return try queue.write { db in
             if let signer {
                 try Self.ensureSigning(orderID: event.orderID, signatory: signer, in: db)
