@@ -175,9 +175,19 @@ struct PersistenceTests {
             "com.apple.developer.icloud-container-identifiers": [container],
         ]]
         #expect(AppDatabase.profileAllowsCloudKit(good, containerIdentifier: container))
+        // Issued profiles encode "all iCloud services" as the wildcard string,
+        // not an array — both development and distribution profiles.
+        #expect(AppDatabase.profileAllowsCloudKit(["Entitlements": [
+            "com.apple.developer.icloud-services": "*",
+            "com.apple.developer.icloud-container-identifiers": [container],
+        ]], containerIdentifier: container), "the wildcard grant must pass the gate")
         #expect(!AppDatabase.profileAllowsCloudKit(
             ["Entitlements": [:]], containerIdentifier: container),
                 "a profile without iCloud must fail the gate")
+        #expect(!AppDatabase.profileAllowsCloudKit(["Entitlements": [
+            "com.apple.developer.icloud-services": ["CloudDocuments"],
+            "com.apple.developer.icloud-container-identifiers": [container],
+        ]], containerIdentifier: container), "CloudDocuments alone must fail the gate")
         #expect(!AppDatabase.profileAllowsCloudKit(["Entitlements": [
             "com.apple.developer.icloud-services": ["CloudKit"],
             "com.apple.developer.icloud-container-identifiers": ["iCloud.other.App"],
