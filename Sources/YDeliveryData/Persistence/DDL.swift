@@ -12,7 +12,8 @@ extension AppDatabase {
           "createdAt" REAL NOT NULL,
           "providerAccountRef" TEXT,
           "provider" TEXT NOT NULL,
-          "lastActivityAt" REAL NOT NULL
+          "lastActivityAt" REAL NOT NULL,
+          "ownerSigningKey" TEXT
         ) STRICT;
         CREATE TABLE IF NOT EXISTS "\(OrderProviderStateRow.tableName)" (
           "orderID" TEXT PRIMARY KEY NOT NULL
@@ -22,7 +23,8 @@ extension AppDatabase {
           "tariff" TEXT, "price" TEXT, "currency" TEXT,
           "courierName" TEXT, "courierVehicle" TEXT, "etaMinutes" INTEGER,
           "dueAt" REAL, "finishedAt" REAL,
-          "providerObservedAt" REAL, "mirroredAt" REAL NOT NULL
+          "providerObservedAt" REAL, "mirroredAt" REAL NOT NULL,
+          "signature" TEXT, "signingKeyID" TEXT
         ) STRICT;
         CREATE TABLE IF NOT EXISTS "\(OrderOptionsRow.tableName)" (
           "orderID" TEXT PRIMARY KEY NOT NULL
@@ -42,7 +44,8 @@ extension AppDatabase {
           "entrance" TEXT, "floor" TEXT, "apartment" TEXT, "intercom" TEXT,
           "contactName" TEXT, "contactGivenName" TEXT, "contactFamilyName" TEXT,
           "contactPhone" TEXT, "contactPhoneExtension" TEXT,
-          "visitStatus" TEXT, "visitedAt" REAL, "expectedVisitAt" REAL
+          "visitStatus" TEXT, "visitedAt" REAL, "expectedVisitAt" REAL,
+          "signature" TEXT, "signingKeyID" TEXT
         ) STRICT;
         CREATE TABLE IF NOT EXISTS "\(OrderItemRow.tableName)" (
           "id" TEXT PRIMARY KEY NOT NULL ON CONFLICT REPLACE DEFAULT (uuid()),
@@ -66,7 +69,8 @@ extension AppDatabase {
             REFERENCES "\(OrderRow.tableName)"("id") ON DELETE CASCADE,
           "providerEventID" INTEGER, "at" REAL NOT NULL,
           "kind" TEXT NOT NULL, "providerStatus" TEXT,
-          "detail" TEXT, "source" TEXT NOT NULL
+          "detail" TEXT, "source" TEXT NOT NULL,
+          "signature" TEXT, "signingKeyID" TEXT
         ) STRICT;
         CREATE TABLE IF NOT EXISTS "\(OrderMessageRow.tableName)" (
           "id" TEXT PRIMARY KEY NOT NULL ON CONFLICT REPLACE DEFAULT (uuid()),
@@ -114,6 +118,10 @@ extension AppDatabase {
           "choicesJSON" TEXT NOT NULL,
           "isOptional" INTEGER NOT NULL, "isShownByDefault" INTEGER NOT NULL,
           "carrier" TEXT NOT NULL, "position" INTEGER NOT NULL
+        ) STRICT;
+        CREATE TABLE IF NOT EXISTS "\(OwnerKeyPinRow.tableName)" (
+          "orderRef" TEXT PRIMARY KEY NOT NULL,
+          "publicKey" TEXT NOT NULL, "firstSeenAt" REAL NOT NULL
         ) STRICT;
         CREATE TABLE IF NOT EXISTS "\(SyncStateRow.tableName)" (
           "providerAccountRef" TEXT PRIMARY KEY NOT NULL,
@@ -223,5 +231,18 @@ extension AppDatabase {
         (RouteStopRow.tableName, "building", "TEXT", nil),
         (SavedPlaceRow.tableName, "building", "TEXT", nil),
         (DraftStopRow.tableName, "building", "TEXT", nil),
+        // Record integrity (doc:Collaboration → signed provider state): the
+        // owner key rides the order root; each owner-written row carries its
+        // signature + the signing key's fingerprint. TEXT, not BLOB — a `Data`
+        // column becomes a `CKAsset` on the wire, an asset round-trip per row
+        // for 64 bytes. All nullable: rows written before the columns read as
+        // *unsigned*, not *forged*.
+        (OrderRow.tableName, "ownerSigningKey", "TEXT", nil),
+        (OrderProviderStateRow.tableName, "signature", "TEXT", nil),
+        (OrderProviderStateRow.tableName, "signingKeyID", "TEXT", nil),
+        (ProviderEventRow.tableName, "signature", "TEXT", nil),
+        (ProviderEventRow.tableName, "signingKeyID", "TEXT", nil),
+        (RouteStopRow.tableName, "signature", "TEXT", nil),
+        (RouteStopRow.tableName, "signingKeyID", "TEXT", nil),
     ]
 }

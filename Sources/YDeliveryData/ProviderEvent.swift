@@ -26,11 +26,16 @@ public struct ProviderEvent: Codable, Hashable, Identifiable, Sendable {
     /// sighting derives the same id as its first write.
     public var source: String
 
+    /// Whether this row verifies against the owner's signing key — a read-time
+    /// verdict, never persisted. `nil` off the store's read path.
+    public var signatureStatus: SignatureVerdict?
+
     public init(
         id: UUID? = nil,
         orderID: Order.ID, providerEventID: Int64? = nil, at: Date,
         kind: String, providerStatus: String? = nil,
-        detail: String? = nil, source: String
+        detail: String? = nil, source: String,
+        signatureStatus: SignatureVerdict? = nil
     ) {
         if let id {
             self.id = id
@@ -48,6 +53,7 @@ public struct ProviderEvent: Codable, Hashable, Identifiable, Sendable {
         self.providerStatus = providerStatus
         self.detail = detail
         self.source = source
+        self.signatureStatus = signatureStatus
     }
 }
 

@@ -21,38 +21,58 @@ public struct StatusTimeline: View {
         public var words: LocalizedStringResource
         /// The trail's end — delivered or cancelled — drawn with the status glyph.
         public var terminal: OrderStatus?
+        /// The row's signature verdict — the warnings below ride on it; `nil`,
+        /// `.notSigned`, and `.verified` all render quiet.
+        public var signatureStatus: SignatureVerdict?
+        /// Who last synced a change to this row, per CloudKit — shown only
+        /// beside a warning, so a clean trail stays quiet.
+        public var modifierName: String?
 
         public init(id: UUID, at: Date, words: LocalizedStringResource,
-                    terminal: OrderStatus? = nil) {
+                    terminal: OrderStatus? = nil,
+                    signatureStatus: SignatureVerdict? = nil,
+                    modifierName: String? = nil) {
             self.id = id
             self.at = at
             self.words = words
             self.terminal = terminal
+            self.signatureStatus = signatureStatus
+            self.modifierName = modifierName
         }
 
         /// Phrased events, oldest first, with consecutive repeats of one *phrase*
         /// folded into the first sighting — the journal and a search pass can both
         /// report the same word, and `new` → `estimating` → `accepted` are three wire
         /// words for one thing the reader is told («Placing the order»); the trail
-        /// says it once, at the time it first became true.
+        /// says it once, at the time it first became true. The fold keys on phrase
+        /// *and* verdict — a repeated sighting that failed its signature check must
+        /// not hide behind its verified twin.
         ///
         /// Lives beside the view, not in `YDeliveryData`: the output is a rendering
         /// choice (a `LocalizedStringResource`, a status glyph), while the pure input
         /// — `ProviderStatusPhrase` — already sits in the data target. The day a
         /// non-UI consumer (a snapshot renderer) needs the fold, it moves down.
-        public static func entries(from events: [ProviderEvent]) -> [Entry] {
+        public static func entries(from events: [ProviderEvent],
+                                   modifierNames: [UUID: String] = [:]) -> [Entry] {
             var out: [Entry] = []
             var lastPhrase: String?
+            var lastStatus: SignatureVerdict?
             for event in events.sorted(by: { $0.at < $1.at }) {
                 guard let status = event.providerStatus else { continue }
                 let words = ProviderStatusPhrase.phrase(for: status)
                     ?? LocalizedStringResource("Status updated", bundle: .kit)
                 // The resource's key is the phrase's identity across locales.
-                if words.key == lastPhrase { continue }
+                if words.key == lastPhrase, event.signatureStatus == lastStatus {
+                    continue
+                }
                 lastPhrase = words.key
+                lastStatus = event.signatureStatus
                 out.append(Entry(
                     id: event.id, at: event.at, words: words,
-                    terminal: Self.terminalStatus(for: status)))
+                    terminal: Self.terminalStatus(for: status),
+                    signatureStatus: event.signatureStatus,
+                    modifierName: event.signatureStatus?.trailWarning == nil
+                        ? nil : modifierNames[event.id]))
             }
             return out
         }
@@ -132,14 +152,32 @@ public struct StatusTimeline: View {
 
     /// One change. Each row is its own accessibility element (words, then time),
     /// so VoiceOver walks the trail change by change — `RouteLine` combines at
-    /// the row, never the whole line, and this follows it.
+    /// the row, never the whole line, and this follows it. A failed signature
+    /// adds a second line naming the verdict and — where the share discloses
+    /// it — the account that synced the change; a clean trail stays quiet.
     private func row(_ entry: Entry, isLatest: Bool, stamp: Stamp) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: Layout.Spacing.unit) {
             mark(for: entry, isLatest: isLatest)
                 .frame(width: Self.markColumn)
-            Text(entry.words)
-                .fontWeight(isLatest ? .medium : .regular)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: Layout.Spacing.tight) {
+                Text(entry.words)
+                    .fontWeight(isLatest ? .medium : .regular)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if let warning = entry.signatureStatus?.trailWarning {
+                    Label(
+                        title: {
+                            Text(warning)
+                                + Text(entry.modifierName.map {
+                                    String(localized: LocalizedStringResource(
+                                        " · changed by \($0)", bundle: .kit))
+                                } ?? "")
+                        },
+                        icon: { Image(systemSymbol: .exclamationmarkTriangleFill) }
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                }
+            }
             Text(entry.at, format: stamp.format)
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
@@ -165,6 +203,25 @@ public struct StatusTimeline: View {
 
     /// The mark's column — wide enough for the widest glyph so the words align.
     private static let markColumn: CGFloat = 16
+}
+
+extension SignatureVerdict {
+    /// What a non-quiet verdict says beside the row it was read from — `nil`
+    /// where the row is trusted or the order never signed, so nothing renders.
+    /// The words live on the verdict so the trail and the detail's provider
+    /// block phrase one warning one way.
+    public nonisolated var trailWarning: LocalizedStringResource? {
+        switch self {
+        case .unsigned:
+            LocalizedStringResource("Not signed by the owner", bundle: .kit)
+        case .invalid:
+            LocalizedStringResource("Signature does not match", bundle: .kit)
+        case .keyChanged:
+            LocalizedStringResource("Owner's signing key changed", bundle: .kit)
+        case .notSigned, .verified:
+            nil
+        }
+    }
 }
 
 #Preview("A live trail") {
@@ -210,6 +267,18 @@ public struct StatusTimeline: View {
         ProviderEvent(orderID: UUID(), providerEventID: 1, at: .now, kind: "status", providerStatus: "some_future_status", source: "journal"),
     ])
     .padding()
+}
+
+#Preview("A signature that failed warns in place") {
+    let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+    let order = UUID()
+    let tampered = UUID()
+    StatusTimeline(entries: StatusTimeline.Entry.entries(from: [
+        ProviderEvent(orderID: order, providerEventID: 1, at: t0, kind: "status", providerStatus: "accepted", source: "journal", signatureStatus: .verified),
+        ProviderEvent(id: tampered, orderID: order, providerEventID: 2, at: t0 + 900, kind: "status", providerStatus: "pickuped", source: "journal", signatureStatus: .invalid),
+        ProviderEvent(orderID: order, providerEventID: 3, at: t0 + 3_000, kind: "status", providerStatus: "delivered_finish", source: "journal", signatureStatus: .verified),
+    ], modifierNames: [tampered: "Irina"]))
+        .padding()
 }
 
 #Preview("Nothing yet renders nothing") {

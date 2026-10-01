@@ -1662,13 +1662,16 @@ struct PersistenceTests {
             created: .now, status: .active,
             route: [RoutePoint(latitude: 55, longitude: 37, address: "А")],
             claimID: "claim-share-fail")
-        try database.recordOrder(order)
+        // The index must predate any write: `recordOrder` touches `syncEngine`
+        // (the share-role check), and the engine validates the schema at
+        // construction — an index created after it is never re-checked.
         try await database.queue.write { db in
             try db.execute(sql: """
                 CREATE UNIQUE INDEX "shareFailDedup" ON "providerEvents"
                   ("orderID", "providerEventID")
                 """)
         }
+        try database.recordOrder(order)
         try await withDependencies {
             $0.context = .test
         } operation: {

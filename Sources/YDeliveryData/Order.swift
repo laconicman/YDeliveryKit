@@ -53,6 +53,12 @@ public struct Order: Codable, Hashable, Identifiable, Sendable {
     /// surfaces render (Collaboration → staleness) and the ETA's basis.
     public var providerObservedAt: Date?
 
+    /// Whether the provider mirror row verifies against the owner's signing
+    /// key — a read-time verdict, never persisted on the model. `nil` on
+    /// orders that never came through `readOrders` (drafts, previews) — the
+    /// unsigned/absent cases still decode as nil on old data.
+    public var signatureStatus: SignatureVerdict?
+
     /// The estimated arrival — the provider's own clock, not the read's.
     /// Nil when either side is missing.
     public var etaAt: Date? {
@@ -83,7 +89,8 @@ public struct Order: Codable, Hashable, Identifiable, Sendable {
         courierVehicle: String? = nil,
         etaMinutes: Int? = nil,
         providerStatus: String? = nil,
-        providerObservedAt: Date? = nil
+        providerObservedAt: Date? = nil,
+        signatureStatus: SignatureVerdict? = nil
     ) {
         self.id = id
         self.created = created
@@ -98,6 +105,7 @@ public struct Order: Codable, Hashable, Identifiable, Sendable {
         self.etaMinutes = etaMinutes
         self.providerStatus = providerStatus
         self.providerObservedAt = providerObservedAt
+        self.signatureStatus = signatureStatus
     }
 }
 
