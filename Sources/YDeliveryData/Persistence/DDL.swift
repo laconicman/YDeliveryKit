@@ -101,6 +101,7 @@ extension AppDatabase {
         CREATE TABLE IF NOT EXISTS "\(SavedPlaceRow.tableName)" (
           "id" TEXT PRIMARY KEY NOT NULL ON CONFLICT REPLACE DEFAULT (uuid()),
           "name" TEXT NOT NULL, "kind" TEXT NOT NULL,
+          "pinned" INTEGER NOT NULL,
           "latitude" REAL NOT NULL, "longitude" REAL NOT NULL,
           "address" TEXT NOT NULL,
           "building" TEXT,
@@ -114,6 +115,19 @@ extension AppDatabase {
           "choicesJSON" TEXT NOT NULL,
           "isOptional" INTEGER NOT NULL, "isShownByDefault" INTEGER NOT NULL,
           "carrier" TEXT NOT NULL, "position" INTEGER NOT NULL
+        ) STRICT;
+        CREATE TABLE IF NOT EXISTS "\(ParcelTemplateRow.tableName)" (
+          "id" TEXT PRIMARY KEY NOT NULL ON CONFLICT REPLACE DEFAULT (uuid()),
+          "name" TEXT NOT NULL, "pinned" INTEGER NOT NULL
+        ) STRICT;
+        CREATE TABLE IF NOT EXISTS "\(ParcelTemplateItemRow.tableName)" (
+          "id" TEXT PRIMARY KEY NOT NULL ON CONFLICT REPLACE DEFAULT (uuid()),
+          "templateID" TEXT NOT NULL
+            REFERENCES "\(ParcelTemplateRow.tableName)"("id") ON DELETE CASCADE,
+          "position" INTEGER NOT NULL,
+          "name" TEXT NOT NULL, "quantity" INTEGER NOT NULL,
+          "weightKg" REAL, "cost" TEXT, "currency" TEXT NOT NULL,
+          "sizeLengthCm" REAL, "sizeWidthCm" REAL, "sizeHeightCm" REAL
         ) STRICT;
         CREATE TABLE IF NOT EXISTS "\(SyncStateRow.tableName)" (
           "providerAccountRef" TEXT PRIMARY KEY NOT NULL,
@@ -223,5 +237,8 @@ extension AppDatabase {
         (RouteStopRow.tableName, "building", "TEXT", nil),
         (SavedPlaceRow.tableName, "building", "TEXT", nil),
         (DraftStopRow.tableName, "building", "TEXT", nil),
+        // The sender's library — the pin flag on remembered doors. `DEFAULT 0`
+        // exists only to satisfy ALTER's grammar; every writer states it.
+        (SavedPlaceRow.tableName, "pinned", "INTEGER NOT NULL DEFAULT 0", nil),
     ]
 }

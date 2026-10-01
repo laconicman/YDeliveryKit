@@ -217,6 +217,9 @@ struct SavedPlaceRow: Identifiable {
     let id: UUID
     var name = ""
     var kind = "other"
+    /// Pinned places lead the picker's chip row — pin ≈ favourite, the
+    /// sender's-library ruling (doc:Roadmap).
+    var pinned = false
     var latitude = 0.0
     var longitude = 0.0
     var address = ""
@@ -245,6 +248,41 @@ struct CustomFieldDefinitionRow: Identifiable {
     var isShownByDefault = true
     var carrier = "none"
     var position = 0
+}
+
+/// The sender's parcel library — reusable «What's inside» rows (doc:Roadmap →
+/// the sender's library). FK-less root: never a share member — the vocabulary
+/// syncs to the owner's devices, and an order's parcels stay `orderItems`.
+/// `name` is the chip label, seeded from the item's own name at save — a
+/// template renames without lying about the goods it describes.
+@Table("parcelTemplates")
+struct ParcelTemplateRow: Identifiable {
+    let id: UUID
+    var name = ""
+    var pinned = false
+}
+
+/// One template's contents — `orderItems`' field set minus `orderID` and the
+/// journey refs, which are route-relative and cannot live in a library entry.
+/// `position` exists from day one although the v1 editor writes exactly one row
+/// per template: a multi-item bundle is then a UI widening, not a schema fork —
+/// read `items.count == 1` as the editor's convention, never the schema's
+/// invariant.
+@Table("parcelTemplateItems")
+struct ParcelTemplateItemRow: Identifiable {
+    let id: UUID
+    var templateID: ParcelTemplateRow.ID
+    var position = 0
+    var name = ""
+    var quantity = 1
+    var weightKg: Double?
+    var cost: String?
+    /// No default — the writer names its currency; a package constant would bind
+    /// the table to one market.
+    var currency: String
+    var sizeLengthCm: Double?
+    var sizeWidthCm: Double?
+    var sizeHeightCm: Double?
 }
 
 // MARK: - Device tier — never registered with SyncEngine, never leaves this device.
