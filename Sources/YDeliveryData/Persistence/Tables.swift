@@ -23,6 +23,12 @@ struct OrderRow: Identifiable {
     var provider: String
     @Column(as: Date.UnixEpochSecondsRepresentation.self)
     var lastActivityAt: Date = .init(timeIntervalSince1970: 0)
+    /// The owner's signing public key, base64 — the only self-signed surface:
+    /// the key that attests everything else cannot attest itself, so readers
+    /// pin it on first sight (TOFU) and a change is itself a warning. TEXT, not
+    /// BLOB: a `Data` column becomes a `CKAsset` on the wire — an asset
+    /// round-trip per row for 32 bytes.
+    var ownerSigningKey: String?
 }
 
 /// The provider mirror, 1:1 — PK is the FK. Owner-sync writes only.
@@ -53,6 +59,12 @@ struct OrderProviderStateRow {
     var providerObservedAt: Date?
     @Column(as: Date.UnixEpochSecondsRepresentation.self)
     var mirroredAt: Date = .init(timeIntervalSince1970: 0)
+    /// Ed25519 signature over the canonical row, base64 TEXT — a `Data` column
+    /// would ride the wire as a `CKAsset` (an extra fetch for 64 bytes).
+    var signature: String?
+    /// Which key signed — `ed25519.v1.<fingerprint>` — so rotation and future
+    /// formats stay legible from the row alone.
+    var signingKeyID: String?
 }
 
 /// The repeatable `DeliveryOptions` fields, 1:1 — PK is the FK again.
@@ -94,6 +106,11 @@ struct RouteStopRow: Identifiable {
     var visitStatus: String?
     var visitedAt: Double?
     var expectedVisitAt: Double?
+    /// Owner signature over the whole row — an address a participant rewrites
+    /// is a worse forgery than a faked visit, so the signed surface is the
+    /// row, not just the visit columns (doc:Collaboration).
+    var signature: String?
+    var signingKeyID: String?
 }
 
 /// Parcel contents. `pickupStopRef`/`dropoffStopRef` are *values* → `RouteStopRow.id`;
@@ -148,6 +165,10 @@ struct ProviderEventRow: Identifiable {
     var providerStatus: String?
     var detail: String?
     var source = ""
+    /// Owner signature over the canonical row — base64 TEXT, same as the
+    /// mirror's: 64 bytes is below the size where a `CKAsset` earns its fetch.
+    var signature: String?
+    var signingKeyID: String?
 }
 
 /// The chat — the only participant-writable stream. `attachmentRef` is a value →
@@ -252,6 +273,23 @@ struct CustomFieldDefinitionRow: Identifiable {
 // MARK: - Device tier — never registered with SyncEngine, never leaves this device.
 // The no-secondary-UNIQUE rule governs synchronized tables only, so
 // `pendingDiscoveries` may dedupe by UNIQUE(providerAccountRef, claimID).
+
+/// The TOFU pin for an order's `ownerSigningKey`: the first key this device
+/// saw stamped on the order. A later mismatch reads as `keyChanged` — the
+/// warning is the pin's whole job, so the pin never rewrites itself (a silent
+/// re-pin would bless the forgery it exists to catch). Device tier: the pin is
+/// this reader's memory, not shareable state. `orderRef` is a value →
+/// `OrderRow.id`, no REFERENCES — a dangling pin after an order's deletion is
+/// harmless, and the device tier owes CloudKit no referential story.
+@Table("ownerKeyPins")
+struct OwnerKeyPinRow {
+    @Column(primaryKey: true)
+    var orderRef: UUID
+    /// The pinned public key, base64 — the same spelling `orders` carries.
+    var publicKey: String
+    @Column(as: Date.UnixEpochSecondsRepresentation.self)
+    var firstSeenAt: Date = .init(timeIntervalSince1970: 0)
+}
 
 /// Journal position per provider account — per-device by correctness (two devices
 /// sharing a cursor would consume each other's events).
