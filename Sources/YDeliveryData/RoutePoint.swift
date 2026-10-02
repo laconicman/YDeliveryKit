@@ -40,6 +40,12 @@ public struct RoutePoint: Codable, Hashable, Sendable {
     /// rows written before the field decode with it absent.
     public var visit: Visit?
 
+    /// Whether this stop's stored row verifies against the owner's signing
+    /// key — a read-time verdict, never persisted. `nil` off the store's read
+    /// path (drafts, saved places, previews): the whole row is signed — a
+    /// rewritten address fails exactly like a faked visit.
+    public var signatureStatus: SignatureVerdict?
+
     /// What happens at this stop — pickup, handover, or the courier's return leg.
     /// Optional because a point is not always riding a route: saved places and
     /// recents are roleless, and rows written before the field decode with it
@@ -98,7 +104,8 @@ public struct RoutePoint: Codable, Hashable, Sendable {
         contactPhone: String? = nil,
         contactPhoneExtension: String? = nil,
         visit: Visit? = nil,
-        role: Role? = nil
+        role: Role? = nil,
+        signatureStatus: SignatureVerdict? = nil
     ) {
         self.latitude = latitude
         self.longitude = longitude
@@ -111,6 +118,7 @@ public struct RoutePoint: Codable, Hashable, Sendable {
         self.contactPhoneExtension = contactPhoneExtension
         self.visit = visit
         self.role = role
+        self.signatureStatus = signatureStatus
     }
 }
 

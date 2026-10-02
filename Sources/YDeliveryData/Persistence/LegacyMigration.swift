@@ -29,15 +29,18 @@ enum LegacyMigration {
     /// hostage. A source that throws leaves its file untouched and logs loudly;
     /// the store still opens, and next launch retries. The account/provider pair is
     /// the consumer's: migrated rows attach to whichever account the host named.
+    /// `signatory` stamps `ownerSigningKey` and signs the imported provider rows —
+    /// migrated history is owner-authored, so it reads `verified`, not flagged.
     static func run(in directory: URL, db: DatabaseQueue,
-                    providerAccountRef: String, provider: String) {
-        migrateOrders(in: directory, db: db, provider: provider)
+                    providerAccountRef: String, provider: String,
+                    signatory: Signatory?) {
+        migrateOrders(in: directory, db: db, provider: provider, signatory: signatory)
         migrateSyncState(in: directory, db: db, providerAccountRef: providerAccountRef)
         migratePlaces(in: directory, db: db)
     }
 
     private static func migrateOrders(in directory: URL, db: DatabaseQueue,
-                                      provider: String) {
+                                      provider: String, signatory: Signatory?) {
         migrate(file: "orders.json", in: directory, decode: {
             try JSONDecoder().decode([Order].self, from: $0)
         }, insert: { orders, db in
@@ -47,7 +50,8 @@ enum LegacyMigration {
                 // and `orderDrafts` is skeletal (no route columns), so the refused
                 // rows separate into a durable sibling file instead.
                 if order.status == .draft { drafts.append(order); continue }
-                try AppDatabase.insertMigrating(order, provider: provider, into: db)
+                try AppDatabase.insertMigrating(
+                    order, provider: provider, signatory: signatory, into: db)
             }
             return drafts.isEmpty ? nil : drafts
         }, db: db)

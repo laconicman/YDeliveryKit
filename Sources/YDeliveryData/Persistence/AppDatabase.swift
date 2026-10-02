@@ -37,27 +37,43 @@ public final class AppDatabase: Sendable {
     private let opened = OSAllocatedUnfairLock<Result<DatabaseQueue, Error>?>(initialState: nil)
     private let engineOpened = OSAllocatedUnfairLock<Result<SyncEngine, Error>?>(initialState: nil)
     private let syncFailure = OSAllocatedUnfairLock<Error?>(initialState: nil)
+    /// Key custody for record signing — `nil` when the consumer named no
+    /// `signingService` (previews, tests): writes then land unsigned and reads
+    /// report `.notSigned`, the honest answer for "nothing could have signed".
+    let signingKeyStore: SigningKeyStore?
+    /// `nil`-inside means unresolved, `nil`-result means unavailable — both
+    /// distinct from a held key. Cached so the Keychain is hit once per store.
+    let signingKeyCell = OSAllocatedUnfairLock<Signatory??>(initialState: nil)
 
     /// Both identifiers are the consumer's to name (Kit rule 2 — nothing here may
     /// bind one app or one provider): the account key feeds `syncStates`, the
-    /// container feeds the engine.
-    public init(directory: URL, providerAccountRef: String, containerIdentifier: String) {
+    /// container feeds the engine. `signingService`/`keychainAccessGroup` name the
+    /// synchronizable Keychain item holding the owner's signing key — pass the App
+    /// Group id as the access group so the credential survives an app transfer
+    /// (the same reasoning `TokenStore` documents); omitting them leaves signing
+    /// off, which unsigned reads render honestly.
+    public init(directory: URL, providerAccountRef: String, containerIdentifier: String,
+                signingService: String? = nil, keychainAccessGroup: String? = nil) {
         self.directory = directory
         self.providerAccountRef = providerAccountRef
         self.containerIdentifier = containerIdentifier
+        self.signingKeyStore = signingService.map {
+            SigningKeyStore(service: $0, accessGroup: keychainAccessGroup)
+        }
     }
 
     /// The store rooted in the app's shared container — `nil` when it cannot be
     /// resolved (a state the caller renders, never a crash).
     public static func inAppGroup(
         id: String, providerAccountRef: String, containerIdentifier: String,
-        fileManager: FileManager = .default
+        signingService: String? = nil, fileManager: FileManager = .default
     ) -> AppDatabase? {
         fileManager
             .containerURL(forSecurityApplicationGroupIdentifier: id)
             .map { AppDatabase(
                 directory: $0, providerAccountRef: providerAccountRef,
-                containerIdentifier: containerIdentifier) }
+                containerIdentifier: containerIdentifier,
+                signingService: signingService, keychainAccessGroup: id) }
     }
 
     /// The open queue — public so consumers can run validated reads (the sync
@@ -69,7 +85,7 @@ public final class AppDatabase: Sendable {
                 if let cell { return try cell.get() }
                 let result = Result {
                     try Self.open(in: directory, providerAccountRef: providerAccountRef,
-                                  provider: provider) }
+                                  provider: provider, signatory: signatory) }
                 cell = result
                 return try result.get()
             }
@@ -77,7 +93,7 @@ public final class AppDatabase: Sendable {
     }
 
     private static func open(in directory: URL, providerAccountRef: String,
-                             provider: String) throws -> DatabaseQueue {
+                             provider: String, signatory: Signatory?) throws -> DatabaseQueue {
         // A directory that is not there yet is a state to create, not a failure
         // to report: the App Group container exists by construction, but a
         // consumer-chosen directory — a preview's or a test host's temp path —
@@ -112,7 +128,8 @@ public final class AppDatabase: Sendable {
             }
         }
         LegacyMigration.run(
-            in: directory, db: db, providerAccountRef: providerAccountRef, provider: provider)
+            in: directory, db: db, providerAccountRef: providerAccountRef,
+            provider: provider, signatory: signatory)
         return db
     }
 
@@ -199,16 +216,21 @@ public final class AppDatabase: Sendable {
         return Self.profileAllowsCloudKit(profile, containerIdentifier: containerIdentifier)
     }
 
-    /// The profile's own claim: CloudKit service enabled and our container listed.
+    /// The profile's own claim: CloudKit service enabled and our container
+    /// listed. `icloud-services` is encoded two ways in issued profiles — the
+    /// wildcard string `"*"` (every iCloud service, CloudKit included) or a
+    /// service-name array; reading only the array false-rejects the wildcard
+    /// profiles Apple actually grants (both development and App Store).
     public static func profileAllowsCloudKit(
         _ profile: [String: Any], containerIdentifier: String
     ) -> Bool {
         guard let entitlements = profile["Entitlements"] as? [String: Any],
-              let services = entitlements["com.apple.developer.icloud-services"] as? [String],
-              services.contains("CloudKit"),
               let containers = entitlements["com.apple.developer.icloud-container-identifiers"] as? [String]
         else { return false }
-        return containers.contains(containerIdentifier)
+        let services = entitlements["com.apple.developer.icloud-services"]
+        let cloudKitGranted = (services as? String) == "*"
+            || (services as? [String])?.contains("CloudKit") == true
+        return cloudKitGranted && containers.contains(containerIdentifier)
     }
 
     /// `embedded.mobileprovision` is a CMS-signed plist — the Entitlements dict sits
@@ -297,12 +319,13 @@ public final class AppDatabase: Sendable {
     /// order through the `MAX`/`COALESCE` below — each child aggregate
     /// coalesced to epoch so "no such activity" never wins over a real stamp.
     public func readOrders() throws -> [Order] {
-        try queue.read { db in
+        // First-sight pins collect during the read and land after it — the
+        // device-tier table is this reader's memory of "the key we first
+        // trusted", written once per key per order.
+        var firstSight: [(orderID: UUID, publicKey: String)] = []
+        let orders = try queue.read { db in
             let rows = try Row.fetchAll(db, sql: """
-                SELECT o."id", o."createdAt",
-                       s."status", s."claimID", s."price", s."currency", s."tariff",
-                       s."courierName", s."courierVehicle", s."etaMinutes",
-                       s."providerStatus", s."providerObservedAt"
+                SELECT o."id", o."createdAt", o."ownerSigningKey", s.*
                 FROM "orders" o
                 LEFT JOIN "orderProviderStates" s ON s."orderID" = o."id"
                 ORDER BY MAX(o."lastActivityAt",
@@ -311,11 +334,27 @@ public final class AppDatabase: Sendable {
                     COALESCE((SELECT MAX("createdAt") FROM "orderAttachments"
                               WHERE "orderID" = o."id"), 0)) DESC
                 """)
+            let pins = try Self.ownerKeyPins(in: db)
+            var ownerKeys: [UUID: String?] = [:]
+            for row in rows {
+                let id: UUID = row["id"]
+                let key: String? = row["ownerSigningKey"]
+                ownerKeys[id] = key
+                if let key, pins[id] == nil { firstSight.append((id, key)) }
+            }
             let stops = try Row.fetchAll(db, sql: """
                 SELECT * FROM "routeStops" ORDER BY "orderID", "position"
                 """).reduce(into: [UUID: [RoutePoint]]()) { grouped, row in
                 let orderID: UUID = row["orderID"]
-                grouped[orderID, default: []].append(Self.routeStop(row))
+                var point = Self.routeStop(row)
+                point.signatureStatus = Self.signedRowVerdict(
+                    ownerKey: ownerKeys[orderID] ?? nil, pin: pins[orderID],
+                    signature: row["signature"]) {
+                    CanonicalPayload.payload(
+                        table: RouteStopRow.tableName,
+                        columns: CanonicalPayload.routeStopColumns, row: row)
+                }
+                grouped[orderID, default: []].append(point)
             }
             return rows.map { row in
                 let id: UUID = row["id"]
@@ -340,10 +379,19 @@ public final class AppDatabase: Sendable {
                     providerStatus: row["providerStatus"],
                     providerObservedAt: observedAt.map {
                         Date(timeIntervalSince1970: $0)
+                    },
+                    signatureStatus: Self.signedRowVerdict(
+                        ownerKey: ownerKeys[id] ?? nil, pin: pins[id],
+                        signature: row["signature"]) {
+                        CanonicalPayload.payload(
+                            table: OrderProviderStateRow.tableName,
+                            columns: CanonicalPayload.providerStateColumns, row: row)
                     }
                 )
             }
         }
+        pinFirstSight(firstSight)
+        return orders
     }
 
     /// The single write funnel for both UI and sync-merge writes. `providerObservedAt`
@@ -374,6 +422,14 @@ public final class AppDatabase: Sendable {
         // into the shared tier would let SyncEngine offer an unsent draft as a
         // shareable delivery. Parked drafts live in `orderDrafts`, device-tier.
         guard order.status != .draft else { throw WriteError.draftHasNoProviderExistence }
+        // The signer is decided before the write transaction: a participant's
+        // app writing into a foreign share zone signs nothing — its rows land
+        // unsigned, which readers flag. `isLocallyOwnedZone` must not run inside
+        // `queue.write` (its `syncEngine` touch would re-enter the queue), and
+        // it only runs when a signatory exists — an unsigned store never needs
+        // the engine's answer, and constructing the engine here races sibling
+        // databases on the same file (metadatabase attach during their writes).
+        let signer = signatory.flatMap { isLocallyOwnedZone(orderID: order.id) ? $0 : nil }
         try queue.write { db in
             if let stamp = providerObservedAt?.timeIntervalSince1970,
                try Bool.fetchOne(db, sql: """
@@ -383,7 +439,12 @@ public final class AppDatabase: Sendable {
                 return
             }
             try Self.upsert(order, provider: provider,
-                            providerAccountRef: providerAccountRef, into: db)
+                            providerAccountRef: providerAccountRef,
+                            ownerSigningKey: signer?.publicKey.base64EncodedString(),
+                            into: db)
+            if let signer {
+                try Self.ensureSigning(orderID: order.id, signatory: signer, in: db)
+            }
             // The visit columns are provider-owned like the courier fields below:
             // an unstamped write is a local edit and must not erase what a
             // sighting recorded at the door — each stop re-adopts the stored
@@ -466,6 +527,15 @@ public final class AppDatabase: Sendable {
                     providerObservedAt?.timeIntervalSince1970,
                     Date.now.timeIntervalSince1970,
                 ]))
+            // Signed last: the signature covers the row as persisted, so it can
+            // only be taken once the content is final. A stamp/rotation above
+            // already re-signed everything — these calls then just write another
+            // valid signature over the same bytes (CryptoKit's Ed25519 is
+            // randomized), which is cheap and keeps one signing site.
+            if let signer {
+                try Self.signMirror(orderID: order.id, signatory: signer, in: db)
+                try Self.signStops(orderID: order.id, signatory: signer, in: db)
+            }
         }
     }
 
@@ -474,13 +544,16 @@ public final class AppDatabase: Sendable {
     /// An order that already exists returns early — replay must not resurrect
     /// children a later edit deleted (the draft-holding file replays every open
     /// until the draft tier lands).
-    static func insertMigrating(_ order: Order, provider: String, into db: Database) throws {
+    static func insertMigrating(_ order: Order, provider: String,
+                                signatory: Signatory?, into db: Database) throws {
         try db.execute(sql: """
             INSERT OR IGNORE INTO "orders"
-              ("id", "createdAt", "providerAccountRef", "provider", "lastActivityAt")
-            VALUES (?, ?, NULL, ?, ?)
+              ("id", "createdAt", "providerAccountRef", "provider",
+               "lastActivityAt", "ownerSigningKey")
+            VALUES (?, ?, NULL, ?, ?, ?)
             """, arguments: Self.args([order.id, order.created.timeIntervalSince1970,
-                            provider, order.created.timeIntervalSince1970]))
+                            provider, order.created.timeIntervalSince1970,
+                            signatory?.publicKey.base64EncodedString()]))
         guard db.changesCount > 0 else { return }  // already migrated — leave it alone
         try insertStops(of: order, into: db, upsert: false)
         try db.execute(sql: """
@@ -493,6 +566,13 @@ public final class AppDatabase: Sendable {
                 order.tariff, order.price, order.currency,
                 Date.now.timeIntervalSince1970,
             ]))
+        // Migrated rows are owner-authored history — they sign like any other
+        // first write, so a pre-signing store does not read back flagged.
+        if let signatory {
+            try resignChildren(orderID: order.id, signatory: signatory, in: db)
+            try pinOrderKey(orderID: order.id,
+                            publicKey: signatory.publicKey.base64EncodedString(), in: db)
+        }
     }
 
     /// The UI write — a fresh or re-recorded order. `providerAccountRef` stamps on
@@ -502,18 +582,25 @@ public final class AppDatabase: Sendable {
     /// activity — the file store prepended a re-recorded order, and this column is
     /// the same semantic as a sortable one. `createdAt` keeps the order's
     /// birthday; `lastActivityAt` keeps its place in the list.
+    ///
+    /// `ownerSigningKey` stamps on insert — the creating device is always the
+    /// zone owner, so the root carries the key from its first write — and is
+    /// preserved on conflict: the first writer claims it, and rotation is
+    /// ``ensureSigning``'s deliberate move, not every write's side effect.
     private static func upsert(_ order: Order, provider: String,
-                               providerAccountRef: String, into db: Database) throws {
+                               providerAccountRef: String,
+                               ownerSigningKey: String?, into db: Database) throws {
         try db.execute(sql: """
             INSERT INTO "orders"
-              ("id", "createdAt", "providerAccountRef", "provider", "lastActivityAt")
-            VALUES (?, ?, ?, ?, ?)
+              ("id", "createdAt", "providerAccountRef", "provider",
+               "lastActivityAt", "ownerSigningKey")
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT("id") DO UPDATE SET
               "createdAt" = excluded."createdAt",
               "lastActivityAt" = excluded."lastActivityAt"
             """, arguments: Self.args([order.id, order.created.timeIntervalSince1970,
                             providerAccountRef, provider,
-                            Date.now.timeIntervalSince1970]))
+                            Date.now.timeIntervalSince1970, ownerSigningKey]))
     }
 
     /// The route an unstamped write may safely write: each point's visit is the
@@ -957,7 +1044,14 @@ public final class AppDatabase: Sendable {
     /// the status's own. `lastActivityAt` moves forward only.
     @discardableResult
     public func recordProviderEvent(_ event: ProviderEvent) throws -> ProviderEventOutcome {
-        try queue.write { db in
+        // Same gate as `recordOrder`: outside the write transaction, a
+        // foreign-zone write signs nothing — readers flag the unsigned row —
+        // and no signatory means the engine's answer cannot change the write.
+        let signer = signatory.flatMap { isLocallyOwnedZone(orderID: event.orderID) ? $0 : nil }
+        return try queue.write { db in
+            if let signer {
+                try Self.ensureSigning(orderID: event.orderID, signatory: signer, in: db)
+            }
             try db.execute(sql: """
                 INSERT OR IGNORE INTO "providerEvents"
                   ("id", "orderID", "providerEventID", "at", "kind",
@@ -969,6 +1063,12 @@ public final class AppDatabase: Sendable {
                     event.providerStatus, event.detail, event.source,
                 ]))
             let inserted = db.changesCount > 0
+            if let signer {
+                // Signed even on `IGNORE` — an existing row that somehow went
+                // unsigned (a write while the Keychain was unreachable) gets its
+                // signature on the next sighting.
+                try Self.signEvent(id: event.id, signatory: signer, in: db)
+            }
             var statusAdvanced = false
             if event.providerStatus != nil {
                 let previous: String? = try Row.fetchOne(db, sql: """
@@ -1003,20 +1103,46 @@ public final class AppDatabase: Sendable {
                     WHERE "id" = ?
                     """, arguments: Self.args([event.at.timeIntervalSince1970, event.orderID]))
             }
+            // The mirror re-signs whether or not this event moved it — the
+            // signature covers the stored row either way, so a no-op UPDATE
+            // still needs a fresh signature only if the bytes changed.
+            if let signer {
+                try Self.signMirror(orderID: event.orderID, signatory: signer, in: db)
+            }
             return ProviderEventOutcome(
                 inserted: inserted, statusAdvanced: statusAdvanced)
         }
     }
 
     /// One order's provider history, oldest first — the timeline the detail view
-    /// and the notification audit trail both read.
+    /// and the notification audit trail both read. Each row carries its
+    /// ``SignatureVerdict`` against the order's pinned owner key.
     public func providerEvents(orderID: Order.ID) throws -> [ProviderEvent] {
-        try queue.read { db in
-            try Row.fetchAll(db, sql: """
+        var firstSight: [(orderID: UUID, publicKey: String)] = []
+        let events = try queue.read { db in
+            let ownerKey: String? = try String.fetchOne(db, sql: """
+                SELECT "ownerSigningKey" FROM "orders" WHERE "id" = ?
+                """, arguments: Self.args([orderID]))
+            let pin = try Self.ownerKeyPins(in: db)[orderID]
+            if let ownerKey, pin == nil {
+                firstSight.append((orderID, ownerKey))
+            }
+            return try Row.fetchAll(db, sql: """
                 SELECT * FROM "providerEvents"
                 WHERE "orderID" = ? ORDER BY "at", "id"
-                """, arguments: Self.args([orderID])).map(Self.providerEvent)
+                """, arguments: Self.args([orderID])).map { row in
+                var event = Self.providerEvent(row)
+                event.signatureStatus = Self.signedRowVerdict(
+                    ownerKey: ownerKey, pin: pin, signature: row["signature"]) {
+                    CanonicalPayload.payload(
+                        table: ProviderEventRow.tableName,
+                        columns: CanonicalPayload.providerEventColumns, row: row)
+                }
+                return event
+            }
         }
+        pinFirstSight(firstSight)
+        return events
     }
 
     private static func providerEvent(_ row: Row) -> ProviderEvent {
