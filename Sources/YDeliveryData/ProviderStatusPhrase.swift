@@ -49,7 +49,11 @@ public enum ProviderStatusPhrase {
         case "pay_waiting":
             LocalizedStringResource("Waiting for payment", bundle: .data)
         case "failed":
-            LocalizedStringResource("Delivery failed", bundle: .data)
+            // One wire word, two truths: a claim refused at acceptance never
+            // dispatched, and a dispatched claim can still die mid-route.
+            // «Delivery failed» presumes a delivery existed; «ended before
+            // delivery» is true of both — `failed` is never terminal-delivered.
+            LocalizedStringResource("Ended before delivery", bundle: .data)
         case "cancelled", "cancelled_with_payment", "cancelled_by_taxi",
              "cancelled_with_items_on_hands":
             LocalizedStringResource("Cancelled", bundle: .data)

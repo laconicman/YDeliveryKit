@@ -106,7 +106,10 @@ nonisolated extension OrderStatus {
         case .searching: LocalizedStringResource("Finding a courier", bundle: .kit)
         case .active: LocalizedStringResource("Courier on the way", bundle: .kit)
         case .done: LocalizedStringResource("Delivered", bundle: .kit)
-        case .attention: LocalizedStringResource("Not delivered", bundle: .kit)
+        // «Not delivered» lied twice: a refused claim was never dispatched, and a
+        // claim parked at `ready_for_approval` or `pay_waiting` was never attempted —
+        // the one true word for the whole family is the decision it waits on.
+        case .attention: LocalizedStringResource("Needs a decision", bundle: .kit)
         case .cancelled: LocalizedStringResource("Cancelled", bundle: .kit)
         }
     }
