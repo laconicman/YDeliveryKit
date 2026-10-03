@@ -3,106 +3,262 @@
   "strings" : {
     "%@, ext. %@" : {
       "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@, доб. %@"
+          }
+        }
       }
     },
     "Back at the pickup point" : {
       "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Вернулся на точку забора"
+          }
+        }
       }
     },
     "Cancelled" : {
       "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Отменён"
+          }
+        }
       }
     },
     "Confirming delivery" : {
       "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Подтверждаем доставку"
+          }
+        }
       }
     },
     "Confirming pickup" : {
       "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Подтверждаем забор"
+          }
+        }
       }
     },
     "Confirming the return" : {
       "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Подтверждаем возврат"
+          }
+        }
       }
     },
     "Couldn't price the route" : {
       "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось оценить маршрут"
+          }
+        }
       }
     },
     "Courier assigned — heading to pickup" : {
       "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Курьер назначен, едет на забор"
+          }
+        }
       }
     },
     "Courier is at the destination door" : {
       "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Курьер у двери получателя"
+          }
+        }
       }
     },
     "Courier is at the pickup door" : {
       "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Курьер у двери отправителя"
+          }
+        }
       }
     },
     "Delivered" : {
       "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Доставлено"
+          }
+        }
       }
     },
     "Ended before delivery" : {
       "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Завершился до вручения"
+          }
+        }
       }
     },
     "Heading back to the sender" : {
       "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Возвращается к отправителю"
+          }
+        }
       }
     },
     "Looking for a courier" : {
       "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ищем курьера"
+          }
+        }
       }
     },
     "No courier found" : {
       "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Курьер не найден"
+          }
+        }
       }
     },
     "Picked up" : {
       "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Груз забран"
+          }
+        }
       }
     },
     "Placing the order" : {
       "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Размещаем заявку"
+          }
+        }
       }
     },
     "Returned to the sender" : {
       "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Возвращён отправителю"
+          }
+        }
       }
     },
     "Sharing needs iCloud sync." : {
       "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Для общего доступа нужна синхронизация iCloud."
+          }
+        }
       }
     },
     "Sharing needs one successful sync. Make sure this device is signed in to iCloud and online, then try again in a moment." : {
       "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Для общего доступа нужна хотя бы одна успешная синхронизация. Убедитесь, что устройство вошло в iCloud и подключено к сети, и повторите через минуту."
+          }
+        }
       }
     },
     "The order could not be shared." : {
       "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось открыть общий доступ к заказу."
+          }
+        }
       }
     },
     "This build cannot sync with iCloud." : {
       "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Эта сборка не может синхронизироваться с iCloud."
+          }
+        }
       }
     },
     "This install could not start iCloud sync: %@." : {
       "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Эта установка не смогла запустить синхронизацию iCloud: %@."
+          }
+        }
       }
     },
     "This order has not reached iCloud yet." : {
       "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Этот заказ ещё не попал в iCloud."
+          }
+        }
       }
     },
     "Waiting for payment" : {
       "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ждёт оплаты"
+          }
+        }
       }
     },
     "Waiting for your approval" : {
       "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ждёт вашего подтверждения"
+          }
+        }
       }
     }
   },
