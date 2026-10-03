@@ -16,6 +16,17 @@ nonisolated extension ColorResource {
     static var kitStatusAttention: Self { .init(name: "statusAttention", bundle: .kit) }
     static var kitStatusCancelled: Self { .init(name: "statusCancelled", bundle: .kit) }
 
+    /// The feedback roles (DesignSystemSemantics → "The proposed vocabulary"):
+    /// `bound` shares `statusAttention`'s values on purpose — a precondition is a
+    /// decision the sender owes — under its own name so a future hue change moves
+    /// the role without dragging statuses with it.
+    static var kitFeedbackBound: Self { .init(name: "feedbackBound", bundle: .kit) }
+    /// Text-token for `warning` — the bright `.orange` glyphs keep their system hue;
+    /// words need the AA-darkened variant (glyph 3:1, words 4.5:1).
+    static var kitFeedbackWarningText: Self { .init(name: "feedbackWarningText", bundle: .kit) }
+    /// Text-token for `error` — same split: `.red` glyph, darkened words.
+    static var kitFeedbackErrorText: Self { .init(name: "feedbackErrorText", bundle: .kit) }
+
     static var kitPointStart: Self { .init(name: "pointStart", bundle: .kit) }
     static var kitPointMid: Self { .init(name: "pointMid", bundle: .kit) }
     static var kitPointEnd: Self { .init(name: "pointEnd", bundle: .kit) }
