@@ -80,4 +80,24 @@ struct StatusTimelineTests {
         #expect(entries.count == 1)
         #expect(String(localized: entries[0].words) == "Status updated")
     }
+
+    @Test("Every wire word the collapse calls a decision carries its own phrase")
+    func decisionWordsArePhrased() {
+        // `.attention` is six different waits behind one chip — the phrase is the
+        // row's only way to say which; a missing one would fall back to the
+        // generic «Status updated» and the row would lie by vagueness.
+        for word in ["ready_for_approval", "estimating_failed", "performer_not_found",
+                     "pay_waiting", "failed", "returned", "returned_finish"] {
+            #expect(ProviderStatusPhrase.phrase(for: word) != nil, "\(word) must be phrased")
+        }
+    }
+
+    @Test("«failed» does not presume a delivery — refused claims wear it too")
+    func failedIsHonestForTheNeverDispatched() {
+        // One wire word, two truths: refused-at-acceptance (never dispatched) and
+        // dispatched-then-died. «Delivery failed» presumed the second; «ended
+        // before delivery» is true of both (the drive's seven litter rows).
+        #expect(String(localized: ProviderStatusPhrase.phrase(for: "failed")!)
+                == "Ended before delivery")
+    }
 }

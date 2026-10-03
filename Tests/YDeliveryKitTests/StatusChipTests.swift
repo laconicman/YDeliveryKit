@@ -30,4 +30,13 @@ struct StatusChipTests {
         let words = OrderStatus.allCases.map { String(localized: $0.words) }
         #expect(Set(words).count == words.count)
     }
+
+    @Test("Attention speaks as a decision — «Not delivered» lied for claims never dispatched")
+    func attentionSpeaksAsDecision() {
+        // A claim parked at `ready_for_approval`/`pay_waiting` was never attempted;
+        // a claim refused at acceptance was never dispatched. «Not delivered»
+        // presumed a delivery existed — the family word is the wait, not the
+        // outcome (the device drive's litter rows).
+        #expect(String(localized: OrderStatus.attention.words) == "Needs a decision")
+    }
 }
