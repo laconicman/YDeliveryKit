@@ -78,6 +78,9 @@ let package = Package(
                 "YDeliveryData",
                 .product(name: "SFSafeSymbols", package: "SFSafeSymbols"),
             ],
+            // The UI half's own words — the catalog `StatusChip`, `PointBadge`,
+            // `OrderIdentity`, `ETALabel` resolve against `Bundle.kit`.
+            resources: [.process("Localizable.xcstrings")],
             swiftSettings: [
                 .defaultIsolation(MainActor.self),
                 .enableUpcomingFeature("InferIsolatedConformances"),
