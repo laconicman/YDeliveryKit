@@ -9,8 +9,9 @@ sibling app, consumes it **by version**, never by copy.
 What lives here, and the membership test for anything added: *code an extension target
 needs, which cannot import the app.*
 
-- **Design system:** semantic colors (`Colors.xcassets`), `StatusChip`, `PointBadge`,
-  `RouteLine`, `ETALabel`, `OrderIdentity`, the `Layout` and `SurfaceSize` tokens.
+- **Design system:** semantic colors (`Colors.xcassets` — status, point, place, scan,
+  and the `feedback*` roles), `StatusChip`, `Notice`, `PointBadge`, `RouteLine`,
+  `ETALabel`, `OrderIdentity`, the `Layout` and `SurfaceSize` tokens.
 - **App models:** `Order`, `OrderStatus`, `RoutePoint`, `SavedPlace`, `AddressParts`,
   and `DeliveryActivityAttributes` — the Live Activity's shared schema, defined here
   because ActivityKit matches attributes by name *and module*: the app starts and
