@@ -199,16 +199,21 @@ public final class AppDatabase: Sendable {
         return Self.profileAllowsCloudKit(profile, containerIdentifier: containerIdentifier)
     }
 
-    /// The profile's own claim: CloudKit service enabled and our container listed.
+    /// The profile's own claim: CloudKit service enabled and our container
+    /// listed. `icloud-services` is encoded two ways in issued profiles — the
+    /// wildcard string `"*"` (every iCloud service, CloudKit included) or a
+    /// service-name array; reading only the array false-rejects the wildcard
+    /// profiles Apple actually grants (both development and App Store).
     public static func profileAllowsCloudKit(
         _ profile: [String: Any], containerIdentifier: String
     ) -> Bool {
         guard let entitlements = profile["Entitlements"] as? [String: Any],
-              let services = entitlements["com.apple.developer.icloud-services"] as? [String],
-              services.contains("CloudKit"),
               let containers = entitlements["com.apple.developer.icloud-container-identifiers"] as? [String]
         else { return false }
-        return containers.contains(containerIdentifier)
+        let services = entitlements["com.apple.developer.icloud-services"]
+        let cloudKitGranted = (services as? String) == "*"
+            || (services as? [String])?.contains("CloudKit") == true
+        return cloudKitGranted && containers.contains(containerIdentifier)
     }
 
     /// `embedded.mobileprovision` is a CMS-signed plist — the Entitlements dict sits
