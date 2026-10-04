@@ -353,6 +353,162 @@ struct PersistenceTests {
         #expect(stopCount == 1, "derived stop ids replace in place, never duplicate")
     }
 
+    // MARK: Synced writes — upsert and prune, never delete-then-reinsert (YD-34)
+
+    /// The sync metadata rows for one table, keyed by `recordPrimaryKey`:
+    /// `_isDeleted` is the tombstone, `userModificationTime` is what an upload
+    /// queue reads — a write that moves neither is a write CloudKit never sees.
+    private func syncedMetadata(
+        _ database: AppDatabase, type: String
+    ) throws -> [String: (deleted: Bool, modified: Int64)] {
+        try database.queue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT "recordPrimaryKey", "_isDeleted", "userModificationTime"
+                FROM "sqlitedata_icloud"."sqlitedata_icloud_metadata"
+                WHERE "recordType" = ?
+                """, arguments: [type])
+        }.reduce(into: [:]) { map, row in
+            map[row["recordPrimaryKey"] as String] =
+                (deleted: row["_isDeleted"], modified: row["userModificationTime"])
+        }
+    }
+
+    @Test("A re-record keeps the stops' records alive — upsert, never tombstone")
+    func rerecordKeepsStopRecordsAlive() throws {
+        let database = makeDatabase()
+        try withDependencies {
+            $0.context = .test
+        } operation: {
+            _ = try database.syncEngine
+        }
+        let order = Order(
+            created: .now, status: .searching,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А"),
+                    RoutePoint(latitude: 56, longitude: 38, address: "Б")],
+            claimID: "claim-1")
+        let fields = [OrderCustomField(
+            orderID: order.id, fieldRef: UUID(), name: "Подъезд", value: "3")]
+        try database.recordOrder(order, customFields: fields)
+        let stopsBefore = try syncedMetadata(database, type: "routeStops")
+        let fieldsBefore = try syncedMetadata(database, type: "orderCustomFields")
+        #expect(stopsBefore.count == 2)
+        #expect(fieldsBefore.count == 1)
+
+        var edited = order
+        edited.route[0].address = "А, корп. 2"
+        var editedFields = fields
+        editedFields[0].value = "5"
+        try database.recordOrder(edited, customFields: editedFields)
+
+        let stopsAfter = try syncedMetadata(database, type: "routeStops")
+        let fieldsAfter = try syncedMetadata(database, type: "orderCustomFields")
+        #expect(stopsAfter.count == 2, "re-derived stop ids upsert in place")
+        for (key, before) in stopsBefore {
+            let after = try #require(stopsAfter[key])
+            #expect(after.deleted == false,
+                    "delete-then-reinsert would leave a tombstone — the remote record dies")
+            #expect(after.modified > before.modified,
+                    "the upsert re-queues the row; INSERT OR REPLACE never would")
+        }
+        for (key, before) in fieldsBefore {
+            let after = try #require(fieldsAfter[key])
+            #expect(after.deleted == false)
+            #expect(after.modified > before.modified)
+        }
+        #expect(try database.readOrders().first?.route.count == 2)
+    }
+
+    @Test("A shrunk route tombstones only the dropped stop")
+    func shrinkingRouteTombstonesOnlyTheDroppedStop() throws {
+        let database = makeDatabase()
+        try withDependencies {
+            $0.context = .test
+        } operation: {
+            _ = try database.syncEngine
+        }
+        let order = Order(
+            created: .now, status: .searching,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А"),
+                    RoutePoint(latitude: 56, longitude: 38, address: "Б"),
+                    RoutePoint(latitude: 57, longitude: 39, address: "В")],
+            claimID: "claim-1")
+        try database.recordOrder(order)
+
+        var shortened = order
+        shortened.route = Array(order.route.prefix(2))
+        try database.recordOrder(shortened)
+
+        let metadata = try syncedMetadata(database, type: "routeStops")
+        #expect(metadata.count == 3, "the dropped row's metadata stays as a tombstone")
+        #expect(metadata.values.filter(\.deleted).count == 1,
+                "the third stop — and only it — queues its remote delete")
+        #expect(metadata.values.filter { !$0.deleted }.count == 2)
+        #expect(try database.readOrders().first?.route.count == 2)
+    }
+
+    @Test("A renamed place re-queues its record")
+    func renamedPlaceUploads() throws {
+        let database = makeDatabase()
+        try withDependencies {
+            $0.context = .test
+        } operation: {
+            _ = try database.syncEngine
+        }
+        let place = SavedPlace(
+            name: "Дом", kind: .home,
+            point: RoutePoint(latitude: 55, longitude: 37, address: "Тверская, 6"))
+        try database.savePlace(place)
+        let before = try #require(
+            syncedMetadata(database, type: "savedPlaces").values.first)
+
+        var renamed = place
+        renamed.name = "Дом (черный вход)"
+        try database.savePlace(renamed)
+
+        let after = try #require(
+            syncedMetadata(database, type: "savedPlaces").values.first)
+        #expect(after.deleted == false)
+        #expect(after.modified > before.modified,
+                "INSERT OR REPLACE never bumps the stamp — the edit would stay local")
+    }
+
+    @Test("A re-saved template keeps its items' records; a removed item tombstones")
+    func resavedTemplateKeepsItemRecords() throws {
+        let database = makeDatabase()
+        try withDependencies {
+            $0.context = .test
+        } operation: {
+            _ = try database.syncEngine
+        }
+        var template = ParcelTemplate(name: "Коробка", items: [
+            .init(name: "А", currency: "RUB"),
+            .init(name: "Б", currency: "RUB"),
+        ])
+        try database.saveParcelTemplate(template)
+        let before = try syncedMetadata(database, type: "parcelTemplateItems")
+        #expect(before.count == 2)
+
+        template.items[1].name = "Б новая"
+        try database.saveParcelTemplate(template)
+        var after = try syncedMetadata(database, type: "parcelTemplateItems")
+        #expect(after.count == 2)
+        for (key, old) in before {
+            let now = try #require(after[key])
+            #expect(now.deleted == false)
+            #expect(now.modified > old.modified,
+                    "an edited item re-queues; delete-then-reinsert would tombstone it")
+        }
+
+        template.items = [template.items[0]]
+        try database.saveParcelTemplate(template)
+        after = try syncedMetadata(database, type: "parcelTemplateItems")
+        #expect(after.count == 2)
+        #expect(after.values.filter(\.deleted).count == 1,
+                "the removed item is a true delete — it tombstones")
+        #expect(after.values.filter { !$0.deleted }.count == 1)
+        #expect(try database.readParcelTemplates().first?.items.count == 1)
+    }
+
     /// The file store prepended a re-recorded order; `lastActivityAt` carries that
     /// semantic into the contract — a touched order surfaces, never sinks.
     @Test("A re-recorded older order returns to the top of history")

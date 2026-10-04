@@ -401,14 +401,16 @@ public final class AppDatabase: Sendable {
                 effective.route = try Self.reinstatingStoredVisits(
                     of: order, in: db)
             }
-            try db.execute(sql: """
-                DELETE FROM "routeStops" WHERE "orderID" = ?
-                """, arguments: Self.args([order.id]))
+            // Stops upsert in place and the tail prunes — never delete-then-
+            // reinsert of a synced key: sqlite-data's metadata would tombstone
+            // the re-created rows and they would never re-upload (YD-34 in the
+            // app's register).
             try Self.insertStops(of: effective, into: db, upsert: true)
+            try db.execute(sql: """
+                DELETE FROM "routeStops" WHERE "orderID" = ? AND "position" >= ?
+                """, arguments: Self.args([order.id, effective.route.count]))
             if let customFields {
-                try db.execute(sql: """
-                    DELETE FROM "orderCustomFields" WHERE "orderID" = ?
-                    """, arguments: Self.args([order.id]))
+                var keptIDs: [UUID] = []
                 for field in customFields where !field.value.isEmpty {
                     // The row id derives here, never taken from the model: a value
                     // copied off another order (a repeat) carries that order's
@@ -416,13 +418,33 @@ public final class AppDatabase: Sendable {
                     let rowID = UUID.derived(
                         namespace: UUID.DerivedNamespace.orderCustomField,
                         order.id.uuidString, field.fieldRef.uuidString)
+                    keptIDs.append(rowID)
                     try db.execute(sql: """
                         INSERT INTO "orderCustomFields"
                           ("id", "orderID", "fieldRef", "name", "value", "carrier")
                         VALUES (?, ?, ?, ?, ?, ?)
+                        ON CONFLICT("id") DO UPDATE SET
+                          "name" = excluded."name",
+                          "value" = excluded."value",
+                          "carrier" = excluded."carrier"
                         """, arguments: Self.args([rowID, order.id, field.fieldRef,
                                                    field.name, field.value,
                                                    field.carrier?.rawValue]))
+                }
+                // Same discipline as the stops above — an emptied field is a true
+                // drop and tombstones; the rest prune, never wholesale delete.
+                if keptIDs.isEmpty {
+                    try db.execute(sql: """
+                        DELETE FROM "orderCustomFields" WHERE "orderID" = ?
+                        """, arguments: Self.args([order.id]))
+                } else {
+                    let placeholders = keptIDs.map { _ in "?" }.joined(separator: ", ")
+                    try db.execute(sql: """
+                        DELETE FROM "orderCustomFields"
+                        WHERE "orderID" = ? AND "id" NOT IN (\(placeholders))
+                        """, arguments: Self.args(
+                            [order.id as (any DatabaseValueConvertible)?]
+                            + keptIDs.map { $0 as (any DatabaseValueConvertible)? }))
                 }
             }
             try db.execute(sql: """
@@ -560,13 +582,17 @@ public final class AppDatabase: Sendable {
         }
     }
 
+    /// `upsert` writes `ON CONFLICT DO UPDATE`, never `INSERT OR REPLACE`:
+    /// sqlite-data's metadata triggers no-op on a replaced synced key, so the
+    /// row's edits would never reach CloudKit (YD-34 in the app's register).
+    /// The migration branch stays `INSERT OR IGNORE` — replay writes nothing.
     private static func insertStops(of order: Order, into db: Database, upsert: Bool) throws {
         for (index, point) in order.route.enumerated() {
             let id = UUID.derived(
                 namespace: UUID.DerivedNamespace.orderChild,
                 order.id.uuidString, "stop", "\(index)")
             try db.execute(sql: """
-                INSERT OR \(upsert ? "REPLACE" : "IGNORE") INTO "routeStops"
+                \(upsert ? "INSERT INTO" : "INSERT OR IGNORE INTO") "routeStops"
                   ("id", "orderID", "position", "role",
                    "latitude", "longitude", "address",
                    "building", "entrance", "floor", "apartment", "intercom",
@@ -574,6 +600,28 @@ public final class AppDatabase: Sendable {
                    "contactPhone", "contactPhoneExtension",
                    "visitStatus", "visitedAt", "expectedVisitAt")
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                \(upsert ? """
+                ON CONFLICT("id") DO UPDATE SET
+                  "orderID" = excluded."orderID",
+                  "position" = excluded."position",
+                  "role" = excluded."role",
+                  "latitude" = excluded."latitude",
+                  "longitude" = excluded."longitude",
+                  "address" = excluded."address",
+                  "building" = excluded."building",
+                  "entrance" = excluded."entrance",
+                  "floor" = excluded."floor",
+                  "apartment" = excluded."apartment",
+                  "intercom" = excluded."intercom",
+                  "contactName" = excluded."contactName",
+                  "contactGivenName" = excluded."contactGivenName",
+                  "contactFamilyName" = excluded."contactFamilyName",
+                  "contactPhone" = excluded."contactPhone",
+                  "contactPhoneExtension" = excluded."contactPhoneExtension",
+                  "visitStatus" = excluded."visitStatus",
+                  "visitedAt" = excluded."visitedAt",
+                  "expectedVisitAt" = excluded."expectedVisitAt"
+                """ : "")
                 """, arguments: Self.args([
                     id, order.id, index,
                     point.role?.rawValue ?? (index == 0 ? "pickup" : "dropoff"),
@@ -693,14 +741,34 @@ public final class AppDatabase: Sendable {
                 place.pinned = match["pinned"] ?? place.pinned
             }
             let p = place.point
+            // An explicit upsert, never `INSERT OR REPLACE`: a replaced synced
+            // key never re-queues its metadata, so the rename would stay local
+            // (YD-34 in the app's register).
             try db.execute(sql: """
-                INSERT OR REPLACE INTO "savedPlaces"
+                INSERT INTO "savedPlaces"
                   ("id", "name", "kind", "pinned",
                    "latitude", "longitude", "address",
                    "building", "entrance", "floor", "apartment", "intercom",
                    "contactName", "contactGivenName", "contactFamilyName",
                    "contactPhone", "contactPhoneExtension")
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT("id") DO UPDATE SET
+                  "name" = excluded."name",
+                  "kind" = excluded."kind",
+                  "pinned" = excluded."pinned",
+                  "latitude" = excluded."latitude",
+                  "longitude" = excluded."longitude",
+                  "address" = excluded."address",
+                  "building" = excluded."building",
+                  "entrance" = excluded."entrance",
+                  "floor" = excluded."floor",
+                  "apartment" = excluded."apartment",
+                  "intercom" = excluded."intercom",
+                  "contactName" = excluded."contactName",
+                  "contactGivenName" = excluded."contactGivenName",
+                  "contactFamilyName" = excluded."contactFamilyName",
+                  "contactPhone" = excluded."contactPhone",
+                  "contactPhoneExtension" = excluded."contactPhoneExtension"
                 """, arguments: Self.args([
                     place.id, place.name, place.kind.rawValue, place.pinned,
                     p.latitude, p.longitude, p.address,
@@ -748,30 +816,58 @@ public final class AppDatabase: Sendable {
         }
     }
 
-    /// Keeps a template — the root upserted, its items rewritten wholesale: a
-    /// template is a document, not a delta (the draft-save discipline). Children
-    /// die explicitly — `PRAGMA foreign_keys` is off, so CASCADE never fires.
+    /// Keeps a template — root and items upsert in place, then the removed
+    /// items prune: no `INSERT OR REPLACE`, no delete-then-reinsert of a synced
+    /// key, or sqlite-data's metadata would tombstone or never re-queue them
+    /// (YD-34 in the app's register). Children still die explicitly —
+    /// `PRAGMA foreign_keys` is off, so CASCADE never fires.
     public func saveParcelTemplate(_ template: ParcelTemplate) throws {
         try queue.write { db in
             try db.execute(sql: """
-                INSERT OR REPLACE INTO "parcelTemplates" ("id", "name", "pinned")
+                INSERT INTO "parcelTemplates" ("id", "name", "pinned")
                 VALUES (?, ?, ?)
+                ON CONFLICT("id") DO UPDATE SET
+                  "name" = excluded."name",
+                  "pinned" = excluded."pinned"
                 """, arguments: Self.args([template.id, template.name, template.pinned]))
-            try db.execute(
-                sql: "DELETE FROM \"parcelTemplateItems\" WHERE \"templateID\" = ?",
-                arguments: Self.args([template.id]))
+            var keptIDs: [UUID] = []
             for (position, item) in template.items.enumerated() {
+                keptIDs.append(item.id)
                 try db.execute(sql: """
                     INSERT INTO "parcelTemplateItems"
                       ("id", "templateID", "position", "name", "quantity",
                        "weightKg", "cost", "currency",
                        "sizeLengthCm", "sizeWidthCm", "sizeHeightCm")
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT("id") DO UPDATE SET
+                      "templateID" = excluded."templateID",
+                      "position" = excluded."position",
+                      "name" = excluded."name",
+                      "quantity" = excluded."quantity",
+                      "weightKg" = excluded."weightKg",
+                      "cost" = excluded."cost",
+                      "currency" = excluded."currency",
+                      "sizeLengthCm" = excluded."sizeLengthCm",
+                      "sizeWidthCm" = excluded."sizeWidthCm",
+                      "sizeHeightCm" = excluded."sizeHeightCm"
                     """, arguments: Self.args([
                         item.id, template.id, position, item.name, item.quantity,
                         item.weightKg, item.cost, item.currency,
                         item.sizeLengthCm, item.sizeWidthCm, item.sizeHeightCm,
                     ]))
+            }
+            if keptIDs.isEmpty {
+                try db.execute(
+                    sql: "DELETE FROM \"parcelTemplateItems\" WHERE \"templateID\" = ?",
+                    arguments: Self.args([template.id]))
+            } else {
+                let placeholders = keptIDs.map { _ in "?" }.joined(separator: ", ")
+                try db.execute(sql: """
+                    DELETE FROM "parcelTemplateItems"
+                    WHERE "templateID" = ? AND "id" NOT IN (\(placeholders))
+                    """, arguments: Self.args(
+                        [template.id as (any DatabaseValueConvertible)?]
+                        + keptIDs.map { $0 as (any DatabaseValueConvertible)? }))
             }
         }
     }
