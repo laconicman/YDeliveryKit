@@ -17,7 +17,7 @@ import SwiftUI
 /// (a failed read stays quiet `.secondary` text and doesn't reach for this view).
 /// No font is applied; the site picks footnote/subheadline/caption to fit its seat.
 public struct Notice: View {
-    /// The four feedback roles that have chrome. (Read-failures are deliberately
+    /// The five feedback roles that have chrome. (Read-failures are deliberately
     /// absent — a failed read is a retry, not an error, and renders `.secondary`.)
     public enum Role {
         /// Guidance, provenance, invitations — `.secondary`, glyph only where a
@@ -30,6 +30,11 @@ public struct Notice: View {
         case warning
         /// An action tried and failed — a write, a command, a refusal.
         case error
+        /// The outcome the sender wanted — checkmark + the done-family hue.
+        /// A *pre*-decision that merely costs nothing passes its own glyph
+        /// (`.rublesignCircle` for a free cancellation) so the green never
+        /// reads as «done» before anything happened (review, YDelivery #105).
+        case success
     }
 
     let role: Role
@@ -76,6 +81,7 @@ nonisolated extension Notice.Role {
         case .info: nil
         case .bound: .exclamationmarkCircle
         case .warning, .error: .exclamationmarkTriangle
+        case .success: .checkmarkCircle
         }
     }
 
@@ -87,6 +93,7 @@ nonisolated extension Notice.Role {
         case .bound: AnyShapeStyle(Color(.kitFeedbackBound))
         case .warning: AnyShapeStyle(.orange)
         case .error: AnyShapeStyle(.red)
+        case .success: AnyShapeStyle(Color(.kitStatusDone))
         }
     }
 
@@ -97,6 +104,7 @@ nonisolated extension Notice.Role {
         case .bound: AnyShapeStyle(Color(.kitFeedbackBound))
         case .warning: AnyShapeStyle(Color(.kitFeedbackWarningText))
         case .error: AnyShapeStyle(Color(.kitFeedbackErrorText))
+        case .success: AnyShapeStyle(Color(.kitStatusDone))
         }
     }
 }
@@ -107,6 +115,9 @@ nonisolated extension Notice.Role {
         Notice(.bound, "Required — the order doesn't leave without it.")
         Notice(.warning, "This pin was guessed from the text — check the map.")
         Notice(.error, "The provider refused the save.")
+        Notice(.success, "The place was kept.")
+        Notice(.success, "Cancelling is free — the courier has not reached the pickup point.",
+               symbol: .rublesignCircle)
     }
     .font(.footnote)
     .padding()
