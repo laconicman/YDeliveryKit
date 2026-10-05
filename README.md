@@ -11,7 +11,10 @@ needs, which cannot import the app.*
 
 - **Design system:** semantic colors (`Colors.xcassets` — status, point, place, scan,
   and the `feedback*` roles), `StatusChip`, `Notice`, `PointBadge`, `RouteLine`,
-  `ETALabel`, `OrderIdentity`, the `Layout` and `SurfaceSize` tokens.
+  `ETALabel`, `OrderIdentity`, the `Layout` and `SurfaceSize` tokens. `StatusChip`
+  doubles as a control via its `disclosure` variant — a chevron inside the capsule
+  tells a chip that expands something apart from one that only reports. `Notice`
+  takes a caller-built `Text` so an app-owned key resolves in the app's catalog.
 - **App models:** `Order`, `OrderStatus`, `RoutePoint`, `SavedPlace`, `AddressParts`,
   and `DeliveryActivityAttributes` — the Live Activity's shared schema, defined here
   because ActivityKit matches attributes by name *and module*: the app starts and
