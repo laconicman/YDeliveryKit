@@ -41,7 +41,11 @@ public struct Notice: View {
     let message: Text
     let symbol: SFSymbol?
 
-    /// A literal (localized) message. `symbol` overrides the role's default glyph —
+    /// A literal (localized) message — for Kit-owned keys: the `Text` is built
+    /// here, so the key resolves against the Kit's catalog. App callers with an
+    /// app-owned key should build `Text("…")` in their own module and pass it to
+    /// the `Text` init — a key handed across the package boundary renders
+    /// against the wrong catalog. `symbol` overrides the role's default glyph —
     /// a cause that has its own mark uses it (`.wifiSlash` for a dead connection).
     public init(_ role: Role, _ message: LocalizedStringKey, symbol: SFSymbol? = nil) {
         self.init(role, Text(message), symbol: symbol)
@@ -53,7 +57,11 @@ public struct Notice: View {
         self.init(role, Text(message), symbol: symbol)
     }
 
-    private init(_ role: Role, _ message: Text, symbol: SFSymbol?) {
+    /// A caller-built `Text`. The caller's module resolves its own key: a
+    /// `LocalizedStringKey` handed across the package boundary rendered the English
+    /// key on a Russian device (YDelivery, 2026-10-05) while the Russian string sat in
+    /// the app's compiled catalog — build the `Text` where the key lives.
+    public init(_ role: Role, _ message: Text, symbol: SFSymbol? = nil) {
         self.role = role
         self.message = message
         self.symbol = symbol ?? role.defaultSymbol

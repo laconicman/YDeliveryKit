@@ -31,6 +31,16 @@ struct StatusChipTests {
         #expect(Set(words).count == words.count)
     }
 
+    @Test("The disclosure states are three distinct values — collapsed, expanded, and the in-flight read")
+    func disclosureStatesAreDistinct() {
+        let states: [StatusChip.Disclosure] = [.collapsed, .expanded, .opening]
+        #expect(Set(states).count == states.count)
+        // The indicator chip stays the default — a chip that only reports
+        // carries no accessory (DesignSystem → "Control roles").
+        _ = StatusChip(status: .active)
+        _ = StatusChip(status: .active, disclosure: .collapsed)
+    }
+
     @Test("Attention speaks as a decision — «Not delivered» lied for claims never dispatched")
     func attentionSpeaksAsDecision() {
         // A claim parked at `ready_for_approval`/`pay_waiting` was never attempted;

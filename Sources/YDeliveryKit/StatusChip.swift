@@ -10,12 +10,21 @@ import YDeliveryData
 /// the last candidate is the irreducible minimum, which still carries glyph and words —
 /// type and padding shrink first, and past that the words wrap. Nothing truncates.
 public struct StatusChip: View {
+    /// How the chip discloses what it controls. `nil` on the indicator chip.
+    nonisolated public enum Disclosure: Hashable { case collapsed, expanded, opening }
+
     let status: OrderStatus
+    let disclosure: Disclosure?
+
+    /// The gap between the words and the control accessory — tight, it belongs
+    /// to the capsule, not to the row around it.
+    private static let accessoryGap: CGFloat = 4
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    public init(status: OrderStatus) {
+    public init(status: OrderStatus, disclosure: Disclosure? = nil) {
         self.status = status
+        self.disclosure = disclosure
     }
 
     public var body: some View {
@@ -30,18 +39,21 @@ public struct StatusChip: View {
     }
 
     private func label(font: Font, padding: EdgeInsets) -> some View {
-        Label {
-            Text(status.words)
-        } icon: {
-            if let symbol = status.symbol {
-                Image(systemSymbol: symbol)
-                    // The searching glyph is the spinner: the one genuinely indeterminate
-                    // wait (DesignSystem → "Motion"). Reduce Motion: static glyph + words.
-                    .symbolEffect(
-                        .variableColor,
-                        isActive: status == .searching && !reduceMotion
-                    )
+        HStack(spacing: Self.accessoryGap) {
+            Label {
+                Text(status.words)
+            } icon: {
+                if let symbol = status.symbol {
+                    Image(systemSymbol: symbol)
+                        // The searching glyph is the spinner: the one genuinely indeterminate
+                        // wait (DesignSystem → "Motion"). Reduce Motion: static glyph + words.
+                        .symbolEffect(
+                            .variableColor,
+                            isActive: status == .searching && !reduceMotion
+                        )
+                }
             }
+            disclosureAccessory(font: font)
         }
         // Cancelled recedes at regular weight: its AA-darkened value must not read as
         // prominence — recession comes from the neutral tint and the weight, and the
@@ -50,6 +62,25 @@ public struct StatusChip: View {
         .foregroundStyle(foreground)
         .padding(padding)
         .background(background, in: Capsule())
+    }
+
+    /// The control's tell, inside the capsule (DesignSystem → "Control roles"):
+    /// a chevron for a chip that expands in place, a mini spinner while the read
+    /// the tap asked for is still out. The a11y role stays with the host row —
+    /// the chip never declares button traits itself.
+    @ViewBuilder private func disclosureAccessory(font: Font) -> some View {
+        switch disclosure {
+        case .collapsed, .expanded:
+            Image(systemSymbol: .chevronDown)
+                .font(font.weight(.semibold))
+                .rotationEffect(.degrees(disclosure == .expanded ? 180 : 0))
+                .animation(reduceMotion ? nil : .default, value: disclosure)
+        case .opening:
+            ProgressView()
+                .controlSize(.mini)
+        case nil:
+            EmptyView()
+        }
     }
 
     /// Draft is the one status whose token is a *fill*, not a text color — «Черновик» has
@@ -120,6 +151,18 @@ nonisolated extension OrderStatus {
         ForEach(OrderStatus.allCases, id: \.self) { status in
             StatusChip(status: status)
         }
+    }
+    .padding()
+}
+
+#Preview("Control chip — collapsed / expanded / opening") {
+    VStack(alignment: .leading, spacing: 12) {
+        StatusChip(status: .active, disclosure: .collapsed)
+        StatusChip(status: .active, disclosure: .expanded)
+        StatusChip(status: .active, disclosure: .opening)
+        // Same silhouette without the accessory — the chevron is what reads
+        // «this one acts» when color is removed.
+        StatusChip(status: .active)
     }
     .padding()
 }
