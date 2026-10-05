@@ -411,7 +411,7 @@ public final class AppDatabase: Sendable {
                 """, arguments: Self.args([order.id, effective.route.count]))
             if let customFields {
                 var keptIDs: [UUID] = []
-                for field in customFields where !field.value.isEmpty {
+                for field in customFields {
                     // The row id derives here, never taken from the model: a value
                     // copied off another order (a repeat) carries that order's
                     // derivation, which would collide as a foreign primary key.
@@ -431,8 +431,12 @@ public final class AppDatabase: Sendable {
                                                    field.name, field.value,
                                                    field.carrier?.rawValue]))
                 }
-                // Same discipline as the stops above — an emptied field is a true
-                // drop and tombstones; the rest prune, never wholesale delete.
+                // Same discipline as the stops above — and stricter: an emptied
+                // field keeps its row with `value = ''` (the reads filter it
+                // out), because a deleted key re-created before the server
+                // acknowledges the tombstone inherits `_isDeleted = 1` and
+                // never re-uploads (YD-34). Only a field absent from the passed
+                // set is a true drop and prunes.
                 if keptIDs.isEmpty {
                     try db.execute(sql: """
                         DELETE FROM "orderCustomFields" WHERE "orderID" = ?
@@ -586,6 +590,11 @@ public final class AppDatabase: Sendable {
     /// sqlite-data's metadata triggers no-op on a replaced synced key, so the
     /// row's edits would never reach CloudKit (YD-34 in the app's register).
     /// The migration branch stays `INSERT OR IGNORE` — replay writes nothing.
+    ///
+    /// A placed order's route is immutable in the product — the provider claim
+    /// fixes it and items reference stops by id — so a pruned stop never
+    /// regrows under the same key.
+    // TODO(YD-34): revive a tombstoned child if routes ever become editable after placement
     private static func insertStops(of order: Order, into db: Database, upsert: Bool) throws {
         for (index, point) in order.route.enumerated() {
             let id = UUID.derived(
@@ -821,6 +830,12 @@ public final class AppDatabase: Sendable {
     /// key, or sqlite-data's metadata would tombstone or never re-queue them
     /// (YD-34 in the app's register). Children still die explicitly —
     /// `PRAGMA foreign_keys` is off, so CASCADE never fires.
+    ///
+    /// An item id that already belongs to *another* template — a copied item —
+    /// is not re-homed: the copy writes under a fresh id, so re-added items get
+    /// fresh model ids (`ParcelTemplate.Item.id` defaults to `UUID()`) and no
+    /// tombstoned key is ever reused. The model's id drifts that once;
+    /// ``readParcelTemplates`` returns the stored id.
     public func saveParcelTemplate(_ template: ParcelTemplate) throws {
         try queue.write { db in
             try db.execute(sql: """
@@ -832,7 +847,16 @@ public final class AppDatabase: Sendable {
                 """, arguments: Self.args([template.id, template.name, template.pinned]))
             var keptIDs: [UUID] = []
             for (position, item) in template.items.enumerated() {
-                keptIDs.append(item.id)
+                let itemID: UUID
+                if let owner: UUID = try Row.fetchOne(db, sql: """
+                    SELECT "templateID" FROM "parcelTemplateItems" WHERE "id" = ?
+                    """, arguments: Self.args([item.id]))?["templateID"],
+                    owner != template.id {
+                    itemID = UUID()
+                } else {
+                    itemID = item.id
+                }
+                keptIDs.append(itemID)
                 try db.execute(sql: """
                     INSERT INTO "parcelTemplateItems"
                       ("id", "templateID", "position", "name", "quantity",
@@ -851,7 +875,7 @@ public final class AppDatabase: Sendable {
                       "sizeWidthCm" = excluded."sizeWidthCm",
                       "sizeHeightCm" = excluded."sizeHeightCm"
                     """, arguments: Self.args([
-                        item.id, template.id, position, item.name, item.quantity,
+                        itemID, template.id, position, item.name, item.quantity,
                         item.weightKg, item.cost, item.currency,
                         item.sizeLengthCm, item.sizeWidthCm, item.sizeHeightCm,
                     ]))
@@ -973,25 +997,29 @@ public final class AppDatabase: Sendable {
     }
 
     /// One order's field values, in schema order — orphaned values (their
-    /// definition is gone) trail, alphabetically.
+    /// definition is gone) trail, alphabetically. Cleared fields keep their row
+    /// (`value = ''`, so re-filling them never reuses a tombstoned key — YD-34)
+    /// and read as absent.
     public func orderCustomFields(orderID: Order.ID) throws -> [OrderCustomField] {
         try queue.read { db in
             try Row.fetchAll(db, sql: """
                 SELECT f.* FROM "orderCustomFields" f
                 LEFT JOIN "customFieldDefinitions" d ON d."id" = f."fieldRef"
-                WHERE f."orderID" = ?
+                WHERE f."orderID" = ? AND f."value" <> ''
                 ORDER BY (d."position" IS NULL), d."position", f."name"
                 """, arguments: Self.args([orderID])).map(Self.orderCustomField)
         }
     }
 
     /// Every stored field value — the search filter and Spotlight read this once
-    /// rather than per order.
+    /// rather than per order. Cleared rows (`value = ''`) are kept for sync and
+    /// read as absent.
     public func allOrderCustomFields() throws -> [OrderCustomField] {
         try queue.read { db in
             try Row.fetchAll(db, sql: """
                 SELECT f.* FROM "orderCustomFields" f
                 LEFT JOIN "customFieldDefinitions" d ON d."id" = f."fieldRef"
+                WHERE f."value" <> ''
                 ORDER BY (d."position" IS NULL), d."position", f."name"
                 """).map(Self.orderCustomField)
         }
@@ -1029,6 +1057,7 @@ public final class AppDatabase: Sendable {
                 SELECT f."value" FROM "orderCustomFields" f
                 LEFT JOIN "customFieldDefinitions" d ON d."id" = f."fieldRef"
                 WHERE f."orderID" = ? AND f."carrier" = 'orderNumber'
+                  AND f."value" <> ''
                 ORDER BY (d."position" IS NULL), d."position", f."fieldRef"
                 LIMIT 1
                 """, arguments: Self.args([orderID]))

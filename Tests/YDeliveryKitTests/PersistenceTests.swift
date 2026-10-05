@@ -509,6 +509,75 @@ struct PersistenceTests {
         #expect(try database.readParcelTemplates().first?.items.count == 1)
     }
 
+    /// A cleared field is not a delete — the row stays with `value = ''`, so a
+    /// refill under the same derived id never reuses a tombstoned key (YD-34).
+    /// Only dropping the field from the passed set prunes.
+    @Test("A cleared field keeps its row — refilling it never reuses a tombstone")
+    func clearedFieldKeepsItsRow() throws {
+        let database = makeDatabase()
+        try withDependencies {
+            $0.context = .test
+        } operation: {
+            _ = try database.syncEngine
+        }
+        let order = Order(
+            created: .now, status: .searching,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")],
+            claimID: "claim-1")
+        let fields = [OrderCustomField(
+            orderID: order.id, fieldRef: UUID(), name: "Подъезд", value: "3")]
+        try database.recordOrder(order, customFields: fields)
+        #expect(try database.orderCustomFields(orderID: order.id).count == 1)
+
+        var cleared = fields
+        cleared[0].value = ""
+        try database.recordOrder(order, customFields: cleared)
+        #expect(try syncedMetadata(database, type: "orderCustomFields")
+            .values.allSatisfy { !$0.deleted },
+                "a cleared field keeps its row — a delete would tombstone the id")
+        #expect(try database.orderCustomFields(orderID: order.id).isEmpty,
+                "the empty value reads as absent")
+        #expect(try database.allOrderCustomFields().isEmpty)
+
+        var refilled = fields
+        refilled[0].value = "5"
+        try database.recordOrder(order, customFields: refilled)
+        #expect(try syncedMetadata(database, type: "orderCustomFields")
+            .values.allSatisfy { !$0.deleted })
+        #expect(try database.orderCustomFields(orderID: order.id).first?.value == "5")
+    }
+
+    /// A template's item id is its own — an item copied into another template
+    /// writes under a fresh id rather than re-homing the row (YD-34).
+    @Test("A copied item keeps its own template — the id is never re-homed")
+    func copiedItemKeepsItsTemplate() throws {
+        let database = makeDatabase()
+        let copiedID = UUID()
+        let a = ParcelTemplate(name: "А", items: [
+            .init(id: copiedID, name: "Книга", currency: "RUB"),
+        ])
+        try database.saveParcelTemplate(a)
+
+        let b = ParcelTemplate(name: "Б", items: [
+            .init(id: copiedID, name: "Книга", currency: "RUB"),
+        ])
+        try database.saveParcelTemplate(b)
+
+        let read = try database.readParcelTemplates()
+        let storedA = try #require(read.first { $0.id == a.id })
+        let storedB = try #require(read.first { $0.id == b.id })
+        #expect(storedA.items.map(\.id) == [copiedID], "template A keeps its item")
+        let bItemID = try #require(storedB.items.first?.id)
+        #expect(storedB.items.count == 1)
+        #expect(bItemID != copiedID, "the copy writes under a fresh id")
+
+        // The read returns the stored id, so a re-save of what was read is stable.
+        try database.saveParcelTemplate(storedB)
+        let reread = try database.readParcelTemplates()
+        #expect(reread.first { $0.id == b.id }?.items.map(\.id) == [bItemID])
+        #expect(reread.first { $0.id == a.id }?.items.map(\.id) == [copiedID])
+    }
+
     /// The file store prepended a re-recorded order; `lastActivityAt` carries that
     /// semantic into the contract — a touched order surfaces, never sinks.
     @Test("A re-recorded older order returns to the top of history")
