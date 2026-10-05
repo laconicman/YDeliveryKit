@@ -832,10 +832,12 @@ public final class AppDatabase: Sendable {
     /// `PRAGMA foreign_keys` is off, so CASCADE never fires.
     ///
     /// An item id that already belongs to *another* template — a copied item —
-    /// is not re-homed: the copy writes under a fresh id, so re-added items get
-    /// fresh model ids (`ParcelTemplate.Item.id` defaults to `UUID()`) and no
-    /// tombstoned key is ever reused. The model's id drifts that once;
-    /// ``readParcelTemplates`` returns the stored id.
+    /// is not re-homed: the copy writes under a derived id (`templateID ‖
+    /// copiedItemID`), so a re-save of the same stale model lands the same row —
+    /// an upsert, not a prune-and-remint. New items get fresh model ids
+    /// (`ParcelTemplate.Item.id` defaults to `UUID()`) and no tombstoned key is
+    /// ever reused. The model's id drifts that once; ``readParcelTemplates``
+    /// returns the stored id, which this template owns and updates in place.
     public func saveParcelTemplate(_ template: ParcelTemplate) throws {
         try queue.write { db in
             try db.execute(sql: """
@@ -852,7 +854,9 @@ public final class AppDatabase: Sendable {
                     SELECT "templateID" FROM "parcelTemplateItems" WHERE "id" = ?
                     """, arguments: Self.args([item.id]))?["templateID"],
                     owner != template.id {
-                    itemID = UUID()
+                    itemID = .derived(
+                        namespace: UUID.DerivedNamespace.templateItemCopy,
+                        template.id.uuidString, item.id.uuidString)
                 } else {
                     itemID = item.id
                 }

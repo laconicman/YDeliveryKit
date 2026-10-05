@@ -548,10 +548,17 @@ struct PersistenceTests {
     }
 
     /// A template's item id is its own — an item copied into another template
-    /// writes under a fresh id rather than re-homing the row (YD-34).
+    /// writes under a derived id rather than re-homing the row (YD-34), and a
+    /// re-save of the same stale model re-derives that id — an upsert, never a
+    /// prune-and-remint that would tombstone the copy.
     @Test("A copied item keeps its own template — the id is never re-homed")
     func copiedItemKeepsItsTemplate() throws {
         let database = makeDatabase()
+        try withDependencies {
+            $0.context = .test
+        } operation: {
+            _ = try database.syncEngine
+        }
         let copiedID = UUID()
         let a = ParcelTemplate(name: "А", items: [
             .init(id: copiedID, name: "Книга", currency: "RUB"),
@@ -571,11 +578,22 @@ struct PersistenceTests {
         #expect(storedB.items.count == 1)
         #expect(bItemID != copiedID, "the copy writes under a fresh id")
 
-        // The read returns the stored id, so a re-save of what was read is stable.
-        try database.saveParcelTemplate(storedB)
+        // Re-saving the same stale model re-derives the copy's row id — one row,
+        // still alive; a random id would prune-then-remint each save.
+        try database.saveParcelTemplate(b)
+        let metadata = try syncedMetadata(database, type: "parcelTemplateItems")
+        let copyMeta = try #require(metadata[bItemID.uuidString.lowercased()])
+        #expect(copyMeta.deleted == false,
+                "the derived id re-lands in place — no tombstone churn")
         let reread = try database.readParcelTemplates()
         #expect(reread.first { $0.id == b.id }?.items.map(\.id) == [bItemID])
         #expect(reread.first { $0.id == a.id }?.items.map(\.id) == [copiedID])
+
+        // The read returns the stored id, so saving what was read is stable too.
+        try database.saveParcelTemplate(storedB)
+        let rereadAgain = try database.readParcelTemplates()
+        #expect(rereadAgain.first { $0.id == b.id }?.items.map(\.id) == [bItemID])
+        #expect(rereadAgain.first { $0.id == a.id }?.items.map(\.id) == [copiedID])
     }
 
     /// The file store prepended a re-recorded order; `lastActivityAt` carries that
