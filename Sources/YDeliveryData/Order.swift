@@ -53,6 +53,15 @@ public struct Order: Codable, Hashable, Identifiable, Sendable {
     /// surfaces render (Collaboration → staleness) and the ETA's basis.
     public var providerObservedAt: Date?
 
+    /// When the owner shelved the order — the archive is the owner's view of a
+    /// finished delivery, stored on the private tier and never written back to
+    /// the provider (Design → "History is kept, not deleted"). Nil on a
+    /// participant, who holds no private row.
+    public var archivedAt: Date?
+
+    /// Shelved or not — the read-side flag lists filter on.
+    public var isArchived: Bool { archivedAt != nil }
+
     /// The estimated arrival — the provider's own clock, not the read's.
     /// Nil when either side is missing.
     public var etaAt: Date? {
@@ -83,7 +92,8 @@ public struct Order: Codable, Hashable, Identifiable, Sendable {
         courierVehicle: String? = nil,
         etaMinutes: Int? = nil,
         providerStatus: String? = nil,
-        providerObservedAt: Date? = nil
+        providerObservedAt: Date? = nil,
+        archivedAt: Date? = nil
     ) {
         self.id = id
         self.created = created
@@ -98,6 +108,7 @@ public struct Order: Codable, Hashable, Identifiable, Sendable {
         self.etaMinutes = etaMinutes
         self.providerStatus = providerStatus
         self.providerObservedAt = providerObservedAt
+        self.archivedAt = archivedAt
     }
 }
 

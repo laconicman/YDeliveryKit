@@ -270,6 +270,10 @@ public final class AppDatabase: Sendable {
         /// posts go through `postPhotoMessage`, which writes payload and row
         /// in one transaction.
         case photoMessageHasNoPayload
+        /// The archive is the owner's view of a *finished* delivery — `done`,
+        /// `cancelled`, `attention` shelve; a still-moving order refuses (the
+        /// app decides `attention`'s finer case off the provider word).
+        case orderStillMoving
         public var errorDescription: String? {
             switch self {
             case .draftHasNoProviderExistence:
@@ -282,6 +286,8 @@ public final class AppDatabase: Sendable {
                 "a photo message's payload must belong to the same order"
             case .photoMessageHasNoPayload:
                 "a photo message needs its attachment — post through postPhotoMessage"
+            case .orderStillMoving:
+                "A delivery that is still moving cannot be archived."
             }
         }
     }
@@ -307,9 +313,11 @@ public final class AppDatabase: Sendable {
                 SELECT o."id", o."createdAt",
                        s."status", s."claimID", s."price", s."currency", s."tariff",
                        s."courierName", s."courierVehicle", s."etaMinutes",
-                       s."providerStatus", s."providerObservedAt"
+                       s."providerStatus", s."providerObservedAt",
+                       p."archivedAt"
                 FROM "orders" o
                 LEFT JOIN "orderProviderStates" s ON s."orderID" = o."id"
+                LEFT JOIN "orderPrivateStates" p ON p."orderID" = o."id"
                 ORDER BY MAX(o."lastActivityAt",
                     COALESCE((SELECT MAX("sentAt") FROM "orderMessages"
                               WHERE "orderID" = o."id"), 0),
@@ -330,6 +338,7 @@ public final class AppDatabase: Sendable {
                 // subscript's Value to non-optional Double and trap on NULL —
                 // the annotation is what makes the decode optional-aware.
                 let observedAt: Double? = row["providerObservedAt"]
+                let archivedAt: Double? = row["archivedAt"]
                 return Order(
                     id: id,
                     created: Date(timeIntervalSince1970: createdAt),
@@ -344,6 +353,9 @@ public final class AppDatabase: Sendable {
                     etaMinutes: row["etaMinutes"],
                     providerStatus: row["providerStatus"],
                     providerObservedAt: observedAt.map {
+                        Date(timeIntervalSince1970: $0)
+                    },
+                    archivedAt: archivedAt.map {
                         Date(timeIntervalSince1970: $0)
                     }
                 )
@@ -698,6 +710,46 @@ public final class AppDatabase: Sendable {
                     expectedAt: expectedVisitAt.map { Date(timeIntervalSince1970: $0) })
             }
         return point
+    }
+
+    // MARK: - Private order state
+
+    /// Shelves or returns an order — the archive is the owner's view, so it
+    /// lives on the private tier and no provider merge may write it.
+    /// `recordOrder` never touches this row. An id that isn't an order here
+    /// writes nothing and succeeds — the table's foreign key names its order,
+    /// so a private row cannot outlive a dangling reference. Only a finished
+    /// order shelves: `done`, `cancelled`, `attention` archive; a still-moving
+    /// order throws ``WriteError/orderStillMoving`` (unarchiving is always
+    /// allowed). Re-archiving keeps the first shelf date — the stamp is when
+    /// the order left the list, not the last tap. The write is an explicit
+    /// upsert, never a REPLACE: a replaced synced key never re-queues its
+    /// metadata (YD-34 in the app's register).
+    public func setArchived(_ archived: Bool, orderID: Order.ID) throws {
+        try queue.write { db in
+            guard try Row.fetchOne(db, sql: """
+                SELECT 1 FROM "orders" WHERE "id" = ?
+                """, arguments: Self.args([orderID])) != nil else { return }
+            if archived,
+               let status = try String.fetchOne(db, sql: """
+                   SELECT "status" FROM "orderProviderStates" WHERE "orderID" = ?
+                   """, arguments: Self.args([orderID])),
+               let state = OrderStatus(rawValue: status),
+               [.draft, .searching, .active].contains(state) {
+                throw WriteError.orderStillMoving
+            }
+            try db.execute(sql: """
+                INSERT INTO "orderPrivateStates" ("orderID", "pinned", "archivedAt")
+                VALUES (?, 0, ?)
+                ON CONFLICT("orderID") DO UPDATE SET
+                  "archivedAt" = \(archived
+                      ? "COALESCE(\"orderPrivateStates\".\"archivedAt\", excluded.\"archivedAt\")"
+                      : "NULL")
+                """, arguments: Self.args([
+                    orderID,
+                    archived ? Date.now.timeIntervalSince1970 : nil,
+                ]))
+        }
     }
 
     // MARK: - Saved places

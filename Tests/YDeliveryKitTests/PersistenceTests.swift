@@ -627,6 +627,203 @@ struct PersistenceTests {
         #expect(storedB.items.map(\.quantity) == [1, 3])
     }
 
+    // MARK: Archive — the owner's view, private tier
+
+    @Test("A finished order archives and returns; the stamp is read-side")
+    func archiveRoundTrips() throws {
+        let database = makeDatabase()
+        let order = Order(
+            created: .now, status: .done,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")])
+        try database.recordOrder(order)
+        #expect(try database.readOrders().first?.isArchived == false)
+
+        try database.setArchived(true, orderID: order.id)
+        let stored = try #require(database.readOrders().first)
+        #expect(stored.isArchived)
+        #expect(stored.archivedAt != nil)
+
+        try database.setArchived(false, orderID: order.id)
+        let returned = try #require(database.readOrders().first)
+        #expect(returned.archivedAt == nil)
+        #expect(!returned.isArchived)
+    }
+
+    @Test("Re-recording an archived order keeps the shelf")
+    func recordKeepsTheArchive() throws {
+        let database = makeDatabase()
+        let order = Order(
+            created: .now, status: .done,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")])
+        try database.recordOrder(order)
+        try database.setArchived(true, orderID: order.id)
+
+        var edited = order
+        edited.status = .cancelled
+        try database.recordOrder(edited)
+
+        let stored = try #require(database.readOrders().first)
+        #expect(stored.status == .cancelled)
+        #expect(stored.isArchived,
+                "the private row is the owner's view — no provider merge touches it")
+    }
+
+    /// Only a finished order shelves — `searching`/`active`/`draft` refuse;
+    /// `done`, `cancelled`, `attention` archive. Unarchiving is always allowed.
+    @Test("A delivery still moving cannot be archived")
+    func archiveRefusesALiveOrder() throws {
+        let database = makeDatabase()
+        let order = Order(
+            created: .now, status: .searching,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")])
+        try database.recordOrder(order)
+
+        #expect {
+            try database.setArchived(true, orderID: order.id)
+        } throws: { error in
+            error as? AppDatabase.WriteError == .orderStillMoving
+        }
+        #expect(try database.readOrders().first?.isArchived == false)
+        // The way back is never barred.
+        try database.setArchived(false, orderID: order.id)
+
+        var finished = order
+        for status: OrderStatus in [.done, .cancelled, .attention] {
+            finished.status = status
+            try database.recordOrder(finished)
+            try database.setArchived(true, orderID: order.id)
+            #expect(try database.readOrders().first?.isArchived == true,
+                    "\(status) is finished — it shelves")
+            try database.setArchived(false, orderID: order.id)
+        }
+    }
+
+    /// The shelf date is when the order left the list — a repeat archive is a
+    /// no-op on the stamp, not a re-stamp.
+    @Test("Re-archiving keeps the first shelf date")
+    func archiveStampIsSetOnce() throws {
+        let database = makeDatabase()
+        let order = Order(
+            created: .now, status: .done,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")])
+        try database.recordOrder(order)
+        try database.setArchived(true, orderID: order.id)
+        let first = try #require(database.readOrders().first?.archivedAt)
+
+        try database.setArchived(true, orderID: order.id)
+        #expect(try database.readOrders().first?.archivedAt == first)
+    }
+
+    /// `orders.json` written before the shelf existed carries no `archivedAt` —
+    /// the optional decodes nil and the order reads unshelved.
+    @Test("A pre-archive orders.json decodes with no shelf")
+    func legacyOrderDecodesWithoutArchive() throws {
+        let json = """
+            {
+              "id": "00000000-0000-0000-0000-0000000000e1",
+              "created": 750000000,
+              "status": "done",
+              "route": [{"latitude": 55.0, "longitude": 37.0, "address": "А"}]
+            }
+            """
+        let order = try JSONDecoder().decode(
+            Order.self, from: Data(json.utf8))
+        #expect(order.archivedAt == nil)
+        #expect(!order.isArchived)
+    }
+
+    /// The table's foreign key names its order, so shelving an id that isn't a
+    /// row here writes nothing and succeeds — no dangling private row.
+    @Test("Archiving an order that isn't a row writes nothing and succeeds")
+    func archiveUnknownOrderWritesHarmlessly() throws {
+        let database = makeDatabase()
+        try database.setArchived(true, orderID: UUID())
+        #expect(try database.readOrders().isEmpty)
+        let rows = try database.queue.read {
+            try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM \"orderPrivateStates\"")!
+        }
+        #expect(rows == 0)
+    }
+
+    @Test("The archive stamp leaves a private footprint, never shared")
+    func archiveLeavesPrivateMetadata() throws {
+        let database = makeDatabase()
+        try withDependencies {
+            $0.context = .test
+        } operation: {
+            _ = try database.syncEngine
+        }
+        let order = Order(
+            created: .now, status: .done,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")])
+        try database.recordOrder(order)
+        try database.setArchived(true, orderID: order.id)
+
+        let names = try syncedRecordNames(database)
+        #expect(names.contains { $0.hasSuffix(":orderPrivateStates") })
+        // The private row's metadata is never share-marked — `archivedAt`
+        // cannot ride a CKShare out of the owner's zone.
+        let shared = try database.queue.read { db in
+            try Bool.fetchAll(db, sql: """
+                SELECT "isShared"
+                FROM "sqlitedata_icloud"."sqlitedata_icloud_metadata"
+                WHERE "recordType" = 'orderPrivateStates'
+                """)
+        }
+        #expect(shared.allSatisfy { !$0 })
+    }
+
+    @Test("A pre-archive orderPrivateStates table gains the column")
+    func archiveColumnMigrates() throws {
+        let raw = try DatabaseQueue(
+            path: directory.appendingPathComponent(AppDatabase.filename).path)
+        try raw.write { db in
+            try db.execute(sql: """
+                CREATE TABLE "orders" (
+                  "id" TEXT PRIMARY KEY NOT NULL,
+                  "createdAt" REAL NOT NULL, "providerAccountRef" TEXT,
+                  "provider" TEXT NOT NULL, "lastActivityAt" REAL NOT NULL
+                ) STRICT;
+                CREATE TABLE "orderPrivateStates" (
+                  "orderID" TEXT PRIMARY KEY NOT NULL
+                    REFERENCES "orders"("id") ON DELETE CASCADE,
+                  "personalNote" TEXT, "pinned" INTEGER NOT NULL,
+                  "lastSeenActivityAt" REAL
+                ) STRICT;
+                INSERT INTO "orders"
+                  ("id", "createdAt", "provider", "lastActivityAt")
+                VALUES ('00000000-0000-0000-0000-0000000000d1', 1.7e9, 'yandex', 1.7e9);
+                INSERT INTO "orderPrivateStates"
+                  ("orderID", "personalNote", "pinned")
+                VALUES ('00000000-0000-0000-0000-0000000000d1', 'заметка', 1);
+                """)
+        }
+
+        let database = makeDatabase()
+        let columns = try database.queue.read { db in
+            try String.fetchAll(db, sql: """
+                SELECT "name" FROM pragma_table_info('orderPrivateStates')
+                """)
+        }
+        #expect(columns.contains("archivedAt"), "the late column arrived by ALTER")
+
+        // The pre-existing row survives the ALTER — its pin and note are intact
+        // and a later archive write lands beside them.
+        try database.setArchived(true,
+                                 orderID: UUID(
+                                    uuidString: "00000000-0000-0000-0000-0000000000d1")!)
+        let row = try #require(database.queue.read { db in
+            try Row.fetchOne(db, sql: """
+                SELECT "personalNote", "pinned", "archivedAt"
+                FROM "orderPrivateStates"
+                WHERE "orderID" = '00000000-0000-0000-0000-0000000000d1'
+                """)
+        })
+        #expect(row["personalNote"] as String == "заметка")
+        #expect(row["pinned"] as Int == 1)
+        #expect(row["archivedAt"] as Double? != nil)
+    }
+
     /// The file store prepended a re-recorded order; `lastActivityAt` carries that
     /// semantic into the contract — a touched order surfaces, never sinks.
     @Test("A re-recorded older order returns to the top of history")

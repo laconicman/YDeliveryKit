@@ -96,7 +96,7 @@ extension AppDatabase {
           "orderID" TEXT PRIMARY KEY NOT NULL
             REFERENCES "\(OrderRow.tableName)"("id") ON DELETE CASCADE,
           "personalNote" TEXT, "pinned" INTEGER NOT NULL,
-          "lastSeenActivityAt" REAL
+          "lastSeenActivityAt" REAL, "archivedAt" REAL
         ) STRICT;
         CREATE TABLE IF NOT EXISTS "\(SavedPlaceRow.tableName)" (
           "id" TEXT PRIMARY KEY NOT NULL ON CONFLICT REPLACE DEFAULT (uuid()),
@@ -201,6 +201,7 @@ extension AppDatabase {
         (RouteStopRow.tableName, "visitedAt", "REAL", nil),
         (RouteStopRow.tableName, "expectedVisitAt", "REAL", nil),
         (PendingAcceptanceRow.tableName, "attempt", "INTEGER NOT NULL DEFAULT 1", nil),
+        (OrderPrivateStateRow.tableName, "archivedAt", "REAL", nil),
         // YD-16 — the draft tier grows real columns. NOT NULL additions carry
         // `DEFAULT` only to satisfy ALTER's grammar; the tables were skeletal and
         // never written, so no row can ever read the defaults.
