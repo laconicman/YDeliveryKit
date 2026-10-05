@@ -596,6 +596,37 @@ struct PersistenceTests {
         #expect(rereadAgain.first { $0.id == a.id }?.items.map(\.id) == [copiedID])
     }
 
+    /// Two copies of the same foreign item in one template are two rows — the
+    /// occurrence counter keeps their ids distinct, and entry order re-lands
+    /// the same identities on a re-save.
+    @Test("Two copies of one item stay two rows — repeated copies keep distinct identities")
+    func repeatedCopiesKeepDistinctIdentities() throws {
+        let database = makeDatabase()
+        let copiedID = UUID()
+        let a = ParcelTemplate(name: "А", items: [
+            .init(id: copiedID, name: "Книга", currency: "RUB"),
+        ])
+        try database.saveParcelTemplate(a)
+
+        let b = ParcelTemplate(name: "Б", items: [
+            .init(id: copiedID, name: "Книга", quantity: 1, currency: "RUB"),
+            .init(id: copiedID, name: "Книга", quantity: 3, currency: "RUB"),
+        ])
+        try database.saveParcelTemplate(b)
+
+        var storedB = try #require(database.readParcelTemplates().first { $0.id == b.id })
+        #expect(storedB.items.count == 2, "the copies must not collapse into one row")
+        #expect(storedB.items.map(\.quantity) == [1, 3])
+        let ids = storedB.items.map(\.id)
+        #expect(Set(ids).count == 2)
+
+        // Re-saving the same stale model re-derives both ids — same two rows.
+        try database.saveParcelTemplate(b)
+        storedB = try #require(database.readParcelTemplates().first { $0.id == b.id })
+        #expect(storedB.items.map(\.id) == ids)
+        #expect(storedB.items.map(\.quantity) == [1, 3])
+    }
+
     /// The file store prepended a re-recorded order; `lastActivityAt` carries that
     /// semantic into the contract — a touched order surfaces, never sinks.
     @Test("A re-recorded older order returns to the top of history")

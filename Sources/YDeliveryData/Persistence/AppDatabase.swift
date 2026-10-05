@@ -848,8 +848,12 @@ public final class AppDatabase: Sendable {
                   "pinned" = excluded."pinned"
                 """, arguments: Self.args([template.id, template.name, template.pinned]))
             var keptIDs: [UUID] = []
+            var seen: Set<UUID> = []
+            var occurrences: [UUID: Int] = [:]
             for (position, item) in template.items.enumerated() {
-                let itemID: UUID
+                let occurrence = occurrences[item.id, default: 0]
+                occurrences[item.id] = occurrence + 1
+                var itemID = item.id
                 if let owner: UUID = try Row.fetchOne(db, sql: """
                     SELECT "templateID" FROM "parcelTemplateItems" WHERE "id" = ?
                     """, arguments: Self.args([item.id]))?["templateID"],
@@ -857,9 +861,19 @@ public final class AppDatabase: Sendable {
                     itemID = .derived(
                         namespace: UUID.DerivedNamespace.templateItemCopy,
                         template.id.uuidString, item.id.uuidString)
-                } else {
-                    itemID = item.id
                 }
+                // Two entries resolving to one row id — two copies of the same
+                // foreign item, or the same id twice here — must not collapse:
+                // the later occurrence derives a distinct id. Entry order is the
+                // identity anchor, so a re-save of the same model re-lands the
+                // same rows; a reorder swaps identities but loses nothing.
+                if seen.contains(itemID) {
+                    itemID = .derived(
+                        namespace: UUID.DerivedNamespace.templateItemCopy,
+                        template.id.uuidString, item.id.uuidString,
+                        "\(occurrence)")
+                }
+                seen.insert(itemID)
                 keptIDs.append(itemID)
                 try db.execute(sql: """
                     INSERT INTO "parcelTemplateItems"
