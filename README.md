@@ -43,3 +43,9 @@ the motion table — is recorded in the consuming app's DocC catalogue
 One consumer-facing honesty note: the substrate never destroys bytes. A malformed
 legacy file is rescued aside as `*.corrupted-<t>-<id>.json` before the store opens;
 a failed open is a stored error to render, never a crash and never silent-empty.
+Synced tables obey one write discipline for the same reason: upsert and prune,
+never delete-then-reinsert or `INSERT OR REPLACE` — sqlite-data's metadata would
+tombstone the re-created row or never re-queue it, and the edit would never reach
+CloudKit (YD-34 in the app's register). A cleared value is a kept empty row, not
+a delete — the tombstone is deleted only when the server acknowledges it, so a
+re-created key before that round-trip would inherit `_isDeleted` and stay dead.

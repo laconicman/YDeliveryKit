@@ -41,5 +41,8 @@ extension UUID {
         public static let orderCustomField = UUID(uuidString: "B1C4D7E8-9F0A-4B5C-AD1E-6F7A8B9C0D1E")!
         /// Draft field values: `draftID ‖ fieldRef` — the same derivation, one tier down.
         public static let draftCustomField = UUID(uuidString: "D3E6A1B2-5C7D-4E8F-9A0B-1C2D3E4F5A6B")!
+        /// An item copied between templates: `templateID ‖ copiedItemID` — a
+        /// re-save of the same stale model re-derives the same row id.
+        public static let templateItemCopy = UUID(uuidString: "E4F7B2C3-6D8E-4F9A-A1B2-2D3E4F5A6B7C")!
     }
 }

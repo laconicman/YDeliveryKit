@@ -353,6 +353,280 @@ struct PersistenceTests {
         #expect(stopCount == 1, "derived stop ids replace in place, never duplicate")
     }
 
+    // MARK: Synced writes — upsert and prune, never delete-then-reinsert (YD-34)
+
+    /// The sync metadata rows for one table, keyed by `recordPrimaryKey`:
+    /// `_isDeleted` is the tombstone, `userModificationTime` is what an upload
+    /// queue reads — a write that moves neither is a write CloudKit never sees.
+    private func syncedMetadata(
+        _ database: AppDatabase, type: String
+    ) throws -> [String: (deleted: Bool, modified: Int64)] {
+        try database.queue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT "recordPrimaryKey", "_isDeleted", "userModificationTime"
+                FROM "sqlitedata_icloud"."sqlitedata_icloud_metadata"
+                WHERE "recordType" = ?
+                """, arguments: [type])
+        }.reduce(into: [:]) { map, row in
+            map[row["recordPrimaryKey"] as String] =
+                (deleted: row["_isDeleted"], modified: row["userModificationTime"])
+        }
+    }
+
+    @Test("A re-record keeps the stops' records alive — upsert, never tombstone")
+    func rerecordKeepsStopRecordsAlive() throws {
+        let database = makeDatabase()
+        try withDependencies {
+            $0.context = .test
+        } operation: {
+            _ = try database.syncEngine
+        }
+        let order = Order(
+            created: .now, status: .searching,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А"),
+                    RoutePoint(latitude: 56, longitude: 38, address: "Б")],
+            claimID: "claim-1")
+        let fields = [OrderCustomField(
+            orderID: order.id, fieldRef: UUID(), name: "Подъезд", value: "3")]
+        try database.recordOrder(order, customFields: fields)
+        let stopsBefore = try syncedMetadata(database, type: "routeStops")
+        let fieldsBefore = try syncedMetadata(database, type: "orderCustomFields")
+        #expect(stopsBefore.count == 2)
+        #expect(fieldsBefore.count == 1)
+
+        var edited = order
+        edited.route[0].address = "А, корп. 2"
+        var editedFields = fields
+        editedFields[0].value = "5"
+        try database.recordOrder(edited, customFields: editedFields)
+
+        let stopsAfter = try syncedMetadata(database, type: "routeStops")
+        let fieldsAfter = try syncedMetadata(database, type: "orderCustomFields")
+        #expect(stopsAfter.count == 2, "re-derived stop ids upsert in place")
+        for (key, before) in stopsBefore {
+            let after = try #require(stopsAfter[key])
+            #expect(after.deleted == false,
+                    "delete-then-reinsert would leave a tombstone — the remote record dies")
+            #expect(after.modified > before.modified,
+                    "the upsert re-queues the row; INSERT OR REPLACE never would")
+        }
+        for (key, before) in fieldsBefore {
+            let after = try #require(fieldsAfter[key])
+            #expect(after.deleted == false)
+            #expect(after.modified > before.modified)
+        }
+        #expect(try database.readOrders().first?.route.count == 2)
+    }
+
+    @Test("A shrunk route tombstones only the dropped stop")
+    func shrinkingRouteTombstonesOnlyTheDroppedStop() throws {
+        let database = makeDatabase()
+        try withDependencies {
+            $0.context = .test
+        } operation: {
+            _ = try database.syncEngine
+        }
+        let order = Order(
+            created: .now, status: .searching,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А"),
+                    RoutePoint(latitude: 56, longitude: 38, address: "Б"),
+                    RoutePoint(latitude: 57, longitude: 39, address: "В")],
+            claimID: "claim-1")
+        try database.recordOrder(order)
+
+        var shortened = order
+        shortened.route = Array(order.route.prefix(2))
+        try database.recordOrder(shortened)
+
+        let metadata = try syncedMetadata(database, type: "routeStops")
+        #expect(metadata.count == 3, "the dropped row's metadata stays as a tombstone")
+        #expect(metadata.values.filter(\.deleted).count == 1,
+                "the third stop — and only it — queues its remote delete")
+        #expect(metadata.values.filter { !$0.deleted }.count == 2)
+        #expect(try database.readOrders().first?.route.count == 2)
+    }
+
+    @Test("A renamed place re-queues its record")
+    func renamedPlaceUploads() throws {
+        let database = makeDatabase()
+        try withDependencies {
+            $0.context = .test
+        } operation: {
+            _ = try database.syncEngine
+        }
+        let place = SavedPlace(
+            name: "Дом", kind: .home,
+            point: RoutePoint(latitude: 55, longitude: 37, address: "Тверская, 6"))
+        try database.savePlace(place)
+        let before = try #require(
+            syncedMetadata(database, type: "savedPlaces").values.first)
+
+        var renamed = place
+        renamed.name = "Дом (черный вход)"
+        try database.savePlace(renamed)
+
+        let after = try #require(
+            syncedMetadata(database, type: "savedPlaces").values.first)
+        #expect(after.deleted == false)
+        #expect(after.modified > before.modified,
+                "INSERT OR REPLACE never bumps the stamp — the edit would stay local")
+    }
+
+    @Test("A re-saved template keeps its items' records; a removed item tombstones")
+    func resavedTemplateKeepsItemRecords() throws {
+        let database = makeDatabase()
+        try withDependencies {
+            $0.context = .test
+        } operation: {
+            _ = try database.syncEngine
+        }
+        var template = ParcelTemplate(name: "Коробка", items: [
+            .init(name: "А", currency: "RUB"),
+            .init(name: "Б", currency: "RUB"),
+        ])
+        try database.saveParcelTemplate(template)
+        let before = try syncedMetadata(database, type: "parcelTemplateItems")
+        #expect(before.count == 2)
+
+        template.items[1].name = "Б новая"
+        try database.saveParcelTemplate(template)
+        var after = try syncedMetadata(database, type: "parcelTemplateItems")
+        #expect(after.count == 2)
+        for (key, old) in before {
+            let now = try #require(after[key])
+            #expect(now.deleted == false)
+            #expect(now.modified > old.modified,
+                    "an edited item re-queues; delete-then-reinsert would tombstone it")
+        }
+
+        template.items = [template.items[0]]
+        try database.saveParcelTemplate(template)
+        after = try syncedMetadata(database, type: "parcelTemplateItems")
+        #expect(after.count == 2)
+        #expect(after.values.filter(\.deleted).count == 1,
+                "the removed item is a true delete — it tombstones")
+        #expect(after.values.filter { !$0.deleted }.count == 1)
+        #expect(try database.readParcelTemplates().first?.items.count == 1)
+    }
+
+    /// A cleared field is not a delete — the row stays with `value = ''`, so a
+    /// refill under the same derived id never reuses a tombstoned key (YD-34).
+    /// Only dropping the field from the passed set prunes.
+    @Test("A cleared field keeps its row — refilling it never reuses a tombstone")
+    func clearedFieldKeepsItsRow() throws {
+        let database = makeDatabase()
+        try withDependencies {
+            $0.context = .test
+        } operation: {
+            _ = try database.syncEngine
+        }
+        let order = Order(
+            created: .now, status: .searching,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")],
+            claimID: "claim-1")
+        let fields = [OrderCustomField(
+            orderID: order.id, fieldRef: UUID(), name: "Подъезд", value: "3")]
+        try database.recordOrder(order, customFields: fields)
+        #expect(try database.orderCustomFields(orderID: order.id).count == 1)
+
+        var cleared = fields
+        cleared[0].value = ""
+        try database.recordOrder(order, customFields: cleared)
+        #expect(try syncedMetadata(database, type: "orderCustomFields")
+            .values.allSatisfy { !$0.deleted },
+                "a cleared field keeps its row — a delete would tombstone the id")
+        #expect(try database.orderCustomFields(orderID: order.id).isEmpty,
+                "the empty value reads as absent")
+        #expect(try database.allOrderCustomFields().isEmpty)
+
+        var refilled = fields
+        refilled[0].value = "5"
+        try database.recordOrder(order, customFields: refilled)
+        #expect(try syncedMetadata(database, type: "orderCustomFields")
+            .values.allSatisfy { !$0.deleted })
+        #expect(try database.orderCustomFields(orderID: order.id).first?.value == "5")
+    }
+
+    /// A template's item id is its own — an item copied into another template
+    /// writes under a derived id rather than re-homing the row (YD-34), and a
+    /// re-save of the same stale model re-derives that id — an upsert, never a
+    /// prune-and-remint that would tombstone the copy.
+    @Test("A copied item keeps its own template — the id is never re-homed")
+    func copiedItemKeepsItsTemplate() throws {
+        let database = makeDatabase()
+        try withDependencies {
+            $0.context = .test
+        } operation: {
+            _ = try database.syncEngine
+        }
+        let copiedID = UUID()
+        let a = ParcelTemplate(name: "А", items: [
+            .init(id: copiedID, name: "Книга", currency: "RUB"),
+        ])
+        try database.saveParcelTemplate(a)
+
+        let b = ParcelTemplate(name: "Б", items: [
+            .init(id: copiedID, name: "Книга", currency: "RUB"),
+        ])
+        try database.saveParcelTemplate(b)
+
+        let read = try database.readParcelTemplates()
+        let storedA = try #require(read.first { $0.id == a.id })
+        let storedB = try #require(read.first { $0.id == b.id })
+        #expect(storedA.items.map(\.id) == [copiedID], "template A keeps its item")
+        let bItemID = try #require(storedB.items.first?.id)
+        #expect(storedB.items.count == 1)
+        #expect(bItemID != copiedID, "the copy writes under a fresh id")
+
+        // Re-saving the same stale model re-derives the copy's row id — one row,
+        // still alive; a random id would prune-then-remint each save.
+        try database.saveParcelTemplate(b)
+        let metadata = try syncedMetadata(database, type: "parcelTemplateItems")
+        let copyMeta = try #require(metadata[bItemID.uuidString.lowercased()])
+        #expect(copyMeta.deleted == false,
+                "the derived id re-lands in place — no tombstone churn")
+        let reread = try database.readParcelTemplates()
+        #expect(reread.first { $0.id == b.id }?.items.map(\.id) == [bItemID])
+        #expect(reread.first { $0.id == a.id }?.items.map(\.id) == [copiedID])
+
+        // The read returns the stored id, so saving what was read is stable too.
+        try database.saveParcelTemplate(storedB)
+        let rereadAgain = try database.readParcelTemplates()
+        #expect(rereadAgain.first { $0.id == b.id }?.items.map(\.id) == [bItemID])
+        #expect(rereadAgain.first { $0.id == a.id }?.items.map(\.id) == [copiedID])
+    }
+
+    /// Two copies of the same foreign item in one template are two rows — the
+    /// occurrence counter keeps their ids distinct, and entry order re-lands
+    /// the same identities on a re-save.
+    @Test("Two copies of one item stay two rows — repeated copies keep distinct identities")
+    func repeatedCopiesKeepDistinctIdentities() throws {
+        let database = makeDatabase()
+        let copiedID = UUID()
+        let a = ParcelTemplate(name: "А", items: [
+            .init(id: copiedID, name: "Книга", currency: "RUB"),
+        ])
+        try database.saveParcelTemplate(a)
+
+        let b = ParcelTemplate(name: "Б", items: [
+            .init(id: copiedID, name: "Книга", quantity: 1, currency: "RUB"),
+            .init(id: copiedID, name: "Книга", quantity: 3, currency: "RUB"),
+        ])
+        try database.saveParcelTemplate(b)
+
+        var storedB = try #require(database.readParcelTemplates().first { $0.id == b.id })
+        #expect(storedB.items.count == 2, "the copies must not collapse into one row")
+        #expect(storedB.items.map(\.quantity) == [1, 3])
+        let ids = storedB.items.map(\.id)
+        #expect(Set(ids).count == 2)
+
+        // Re-saving the same stale model re-derives both ids — same two rows.
+        try database.saveParcelTemplate(b)
+        storedB = try #require(database.readParcelTemplates().first { $0.id == b.id })
+        #expect(storedB.items.map(\.id) == ids)
+        #expect(storedB.items.map(\.quantity) == [1, 3])
+    }
+
     /// The file store prepended a re-recorded order; `lastActivityAt` carries that
     /// semantic into the contract — a touched order surfaces, never sinks.
     @Test("A re-recorded older order returns to the top of history")
