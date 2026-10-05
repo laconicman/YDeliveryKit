@@ -668,6 +668,70 @@ struct PersistenceTests {
                 "the private row is the owner's view — no provider merge touches it")
     }
 
+    /// Only a finished order shelves — `searching`/`active`/`draft` refuse;
+    /// `done`, `cancelled`, `attention` archive. Unarchiving is always allowed.
+    @Test("A delivery still moving cannot be archived")
+    func archiveRefusesALiveOrder() throws {
+        let database = makeDatabase()
+        let order = Order(
+            created: .now, status: .searching,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")])
+        try database.recordOrder(order)
+
+        #expect {
+            try database.setArchived(true, orderID: order.id)
+        } throws: { error in
+            error as? AppDatabase.WriteError == .orderStillMoving
+        }
+        #expect(try database.readOrders().first?.isArchived == false)
+        // The way back is never barred.
+        try database.setArchived(false, orderID: order.id)
+
+        var finished = order
+        for status: OrderStatus in [.done, .cancelled, .attention] {
+            finished.status = status
+            try database.recordOrder(finished)
+            try database.setArchived(true, orderID: order.id)
+            #expect(try database.readOrders().first?.isArchived == true,
+                    "\(status) is finished — it shelves")
+            try database.setArchived(false, orderID: order.id)
+        }
+    }
+
+    /// The shelf date is when the order left the list — a repeat archive is a
+    /// no-op on the stamp, not a re-stamp.
+    @Test("Re-archiving keeps the first shelf date")
+    func archiveStampIsSetOnce() throws {
+        let database = makeDatabase()
+        let order = Order(
+            created: .now, status: .done,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")])
+        try database.recordOrder(order)
+        try database.setArchived(true, orderID: order.id)
+        let first = try #require(database.readOrders().first?.archivedAt)
+
+        try database.setArchived(true, orderID: order.id)
+        #expect(try database.readOrders().first?.archivedAt == first)
+    }
+
+    /// `orders.json` written before the shelf existed carries no `archivedAt` —
+    /// the optional decodes nil and the order reads unshelved.
+    @Test("A pre-archive orders.json decodes with no shelf")
+    func legacyOrderDecodesWithoutArchive() throws {
+        let json = """
+            {
+              "id": "00000000-0000-0000-0000-0000000000e1",
+              "created": 750000000,
+              "status": "done",
+              "route": [{"latitude": 55.0, "longitude": 37.0, "address": "А"}]
+            }
+            """
+        let order = try JSONDecoder().decode(
+            Order.self, from: Data(json.utf8))
+        #expect(order.archivedAt == nil)
+        #expect(!order.isArchived)
+    }
+
     /// The table's foreign key names its order, so shelving an id that isn't a
     /// row here writes nothing and succeeds — no dangling private row.
     @Test("Archiving an order that isn't a row writes nothing and succeeds")
