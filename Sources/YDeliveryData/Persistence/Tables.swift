@@ -210,6 +210,8 @@ struct OrderPrivateStateRow {
     var pinned = false
     @Column(as: Date?.UnixEpochSecondsRepresentation.self)
     var lastSeenActivityAt: Date?
+    @Column(as: Date?.UnixEpochSecondsRepresentation.self)
+    var archivedAt: Date?
 }
 
 /// The named destinations. FK-less: never a share root — sharing is per-order.

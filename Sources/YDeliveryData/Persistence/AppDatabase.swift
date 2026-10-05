@@ -307,9 +307,11 @@ public final class AppDatabase: Sendable {
                 SELECT o."id", o."createdAt",
                        s."status", s."claimID", s."price", s."currency", s."tariff",
                        s."courierName", s."courierVehicle", s."etaMinutes",
-                       s."providerStatus", s."providerObservedAt"
+                       s."providerStatus", s."providerObservedAt",
+                       p."archivedAt"
                 FROM "orders" o
                 LEFT JOIN "orderProviderStates" s ON s."orderID" = o."id"
+                LEFT JOIN "orderPrivateStates" p ON p."orderID" = o."id"
                 ORDER BY MAX(o."lastActivityAt",
                     COALESCE((SELECT MAX("sentAt") FROM "orderMessages"
                               WHERE "orderID" = o."id"), 0),
@@ -330,6 +332,7 @@ public final class AppDatabase: Sendable {
                 // subscript's Value to non-optional Double and trap on NULL —
                 // the annotation is what makes the decode optional-aware.
                 let observedAt: Double? = row["providerObservedAt"]
+                let archivedAt: Double? = row["archivedAt"]
                 return Order(
                     id: id,
                     created: Date(timeIntervalSince1970: createdAt),
@@ -344,6 +347,9 @@ public final class AppDatabase: Sendable {
                     etaMinutes: row["etaMinutes"],
                     providerStatus: row["providerStatus"],
                     providerObservedAt: observedAt.map {
+                        Date(timeIntervalSince1970: $0)
+                    },
+                    archivedAt: archivedAt.map {
                         Date(timeIntervalSince1970: $0)
                     }
                 )
@@ -698,6 +704,32 @@ public final class AppDatabase: Sendable {
                     expectedAt: expectedVisitAt.map { Date(timeIntervalSince1970: $0) })
             }
         return point
+    }
+
+    // MARK: - Private order state
+
+    /// Shelves or returns an order — the archive is the owner's view, so it
+    /// lives on the private tier and no provider merge may write it.
+    /// `recordOrder` never touches this row. An id that isn't an order here
+    /// writes nothing and succeeds — the table's foreign key names its order,
+    /// so a private row cannot outlive a dangling reference. The write is an
+    /// explicit upsert, never a REPLACE: a replaced synced key never re-queues
+    /// its metadata (YD-34 in the app's register).
+    public func setArchived(_ archived: Bool, orderID: Order.ID) throws {
+        try queue.write { db in
+            guard try Row.fetchOne(db, sql: """
+                SELECT 1 FROM "orders" WHERE "id" = ?
+                """, arguments: Self.args([orderID])) != nil else { return }
+            try db.execute(sql: """
+                INSERT INTO "orderPrivateStates" ("orderID", "pinned", "archivedAt")
+                VALUES (?, 0, ?)
+                ON CONFLICT("orderID") DO UPDATE SET
+                  "archivedAt" = excluded."archivedAt"
+                """, arguments: Self.args([
+                    orderID,
+                    archived ? Date.now.timeIntervalSince1970 : nil,
+                ]))
+        }
     }
 
     // MARK: - Saved places

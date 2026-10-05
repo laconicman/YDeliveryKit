@@ -23,6 +23,8 @@ needs, which cannot import the app.*
   lazy `SyncEngine` an extension target shares with the app. Both identifiers are the
   consuming app's to name (`inAppGroup(id:providerAccountRef:containerIdentifier:)`):
   the group, the provider account, and the CloudKit container belong to the host.
+  The private tier holds the owner's view — notes, pins, and `archivedAt`, the
+  shelf for a finished order — and never rides a share.
 
 Swift 6, iOS 17 floor. Two targets, two dialects: `YDeliveryData` (models + persistence)
 is `.defaultIsolation(nil)` — library code does not pick an executor for its callers;
