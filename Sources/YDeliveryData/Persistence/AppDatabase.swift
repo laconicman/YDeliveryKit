@@ -94,6 +94,12 @@ public final class AppDatabase: Sendable {
         // call — extensions open this too and never post, so the flag costs
         // them nothing. sqlite-data's metadatabase inherits the
         // configuration, so the sync engine's bookkeeping suspends with it.
+        // The host's side of the contract: open the queue before the first
+        // suspend can post — the `opened` cell makes this open lazy, and GRDB
+        // replays no missed notification to a queue created while suspended
+        // (`suspend()` itself is internal, so the state cannot be re-applied).
+        // A consumer whose lifecycle can produce a late open must re-post the
+        // notification itself once the queue exists.
         var configuration = Configuration()
         configuration.observesSuspensionNotifications = true
         let db = try DatabaseQueue(path: directory.appendingPathComponent(filename).path,
