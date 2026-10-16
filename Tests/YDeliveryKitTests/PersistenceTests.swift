@@ -1639,6 +1639,16 @@ struct PersistenceTests {
                 "a wiped state reads fresh — the next token inherits nothing")
     }
 
+    /// The 0xdead10cc gate's half that lives here (GRDB → DatabaseSharing, "How to
+    /// limit the 0xDEAD10CC exception"): the queue opens observing the suspend /
+    /// resume pair the host posts at the suspension edge. The refusal itself is
+    /// GRDB's contract — asserting it live would suspend every parallel sibling's
+    /// database too: suspension is process-wide, and Swift Testing overlaps tests.
+    @Test("The queue opens observing suspension notifications")
+    func queueObservesSuspension() throws {
+        #expect(try makeDatabase().queue.configuration.observesSuspensionNotifications)
+    }
+
     // MARK: Pending acceptances — YD-5's durable half
 
     @Test("A lost acceptance is noted, drained, and resolved into its order")
