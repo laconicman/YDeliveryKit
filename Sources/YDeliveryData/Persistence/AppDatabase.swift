@@ -84,7 +84,20 @@ public final class AppDatabase: Sendable {
         // may not, and SQLite's "unable to open database file" (error 14) would
         // dress a fresh store as an unreadable one.
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let db = try DatabaseQueue(path: directory.appendingPathComponent(filename).path)
+        // Suspended while holding an SQLite lock is a RunningBoard kill —
+        // 0xdead10cc, and a database this app shares with its extensions is
+        // exactly the file iOS watches. The flag wires the queue to
+        // `Database.suspendNotification`/`resumeNotification`: suspended, it
+        // refuses new locks and interrupts the in-flight statement so its
+        // lock releases *before* the process freezes (GRDB → DatabaseSharing,
+        // "How to limit the 0xDEAD10CC exception"). Posting stays the host's
+        // call — extensions open this too and never post, so the flag costs
+        // them nothing. sqlite-data's metadatabase inherits the
+        // configuration, so the sync engine's bookkeeping suspends with it.
+        var configuration = Configuration()
+        configuration.observesSuspensionNotifications = true
+        let db = try DatabaseQueue(path: directory.appendingPathComponent(filename).path,
+                                   configuration: configuration)
         try db.write { db in
             try db.execute(sql: ddl)
             // The schema's late arrivals: CREATE IF NOT EXISTS never adds a
