@@ -82,7 +82,10 @@ public enum CanonicalPayload {
                 payload.append(contentsOf: int.bigEndianBytes)
             case .double(let double):
                 payload.append(3)
-                payload.append(contentsOf: double.bitPattern.bigEndianBytes)
+                // SQLite writes an integral REAL as an integer and reads it back as a
+                // positive zero, so a bound -0.0 and its stored 0.0 must hash alike:
+                // the sign of zero is canonicalised away (review, PR #46).
+                payload.append(contentsOf: (double == 0 ? 0.0 : double).bitPattern.bigEndianBytes)
             case .blob(let data):
                 payload.append(4)
                 payload.append(contentsOf: UInt32(data.count).bigEndianBytes)

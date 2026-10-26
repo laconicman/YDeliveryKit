@@ -59,7 +59,10 @@ public struct EphemeralKeyStore: SigningKeyStore {
 /// The item's label records which, so the key is rehydrated the way it was made.
 struct DeviceKeyStore: SigningKeyStore {
     /// The App Group the consumer names (Kit rule 2); `nil` only in a host without
-    /// a keychain access group, such as a test runner.
+    /// a keychain access group, such as a test runner. An App Group identifier is a
+    /// keychain access group on its own — no `keychain-access-groups` entry is needed
+    /// (Apple, "Sharing access to keychain items among a collection of apps") — and
+    /// the consuming app already keeps its OAuth token under the same group.
     let accessGroup: String?
 
     static let service = "YDeliveryKit.device-signing-key"

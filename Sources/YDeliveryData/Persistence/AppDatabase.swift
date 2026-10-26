@@ -53,7 +53,11 @@ public final class AppDatabase: Sendable {
 
     /// Both identifiers are the consumer's to name (Kit rule 2 — nothing here may
     /// bind one app or one provider): the account key feeds `syncStates`, the
-    /// container feeds the engine.
+    /// container feeds the engine. `keyStore` defaults to an ephemeral key because a
+    /// store at a directory is a fixture, a preview or a seed; the durable store is
+    /// ``inAppGroup(id:providerAccountRef:containerIdentifier:fileManager:)``, whose
+    /// custody is the Keychain. A consumer that keeps a durable store elsewhere
+    /// passes a custody of its own, or its signing identity changes every launch.
     public init(
         directory: URL, providerAccountRef: String, containerIdentifier: String,
         keyStore: any SigningKeyStore = EphemeralKeyStore()

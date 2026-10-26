@@ -108,14 +108,15 @@ struct SigningPrimitivesTests {
         let stamp = Date(timeIntervalSince1970: 1_700_000_000.5)
         let bindings: [(any DatabaseValueConvertible)?] = [
             nil, "é—ю", 42, 1.5, Data([1, 2, 255]), uuid, stamp.timeIntervalSince1970, true, Int64.max,
+            -0.0,
         ]
-        let columns = ["n", "t", "i", "r", "b", "u", "d", "f", "big"]
+        let columns = ["n", "t", "i", "r", "b", "u", "d", "f", "big", "z"]
         let stored: [DatabaseValue] = try database.queue.write { db in
             try db.execute(sql: """
-                CREATE TEMP TABLE "vector" ("n", "t", "i", "r", "b", "u", "d", "f", "big")
+                CREATE TEMP TABLE "vector" ("n", "t", "i", "r", "b", "u", "d", "f", "big", "z" REAL)
                 """)
             try db.execute(sql: """
-                INSERT INTO "vector" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO "vector" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, arguments: AppDatabase.args(bindings))
             let row = try Row.fetchOne(db, sql: """
                 SELECT * FROM "vector"
@@ -126,6 +127,13 @@ struct SigningPrimitivesTests {
         #expect(bound == stored, "the writer's bytes and the reader's bytes are one payload")
         #expect(bound[5] == uuid.uuidString.lowercased().databaseValue, "UUIDs bind lowercase TEXT")
         #expect(bound[7] == 1.databaseValue, "a Bool is INTEGER 1")
+        if case .double(let storedZero) = stored[9].storage,
+           case .double(let boundZero) = bound[9].storage {
+            #expect(boundZero.sign == .minus && storedZero.sign == .plus,
+                    "SQLite hands a bound -0.0 back as a positive zero; the payload hashes both alike")
+        } else {
+            Issue.record("the zero column did not read back as REAL")
+        }
         #expect(CanonicalPayload.payload(table: "vector", columns: columns, values: bound)
                 == CanonicalPayload.payload(table: "vector", columns: columns, values: stored))
     }
@@ -168,7 +176,8 @@ struct SigningPrimitivesTests {
         let database = makeDatabase()
         let order = Order(
             created: .now, status: .active,
-            route: [stop("Тверская, 6", building: "к. 1", visited: true), stop("Арбат, 1")],
+            route: [stop("Тверская, 6", building: "к. 1", visited: true), stop("Арбат, 1"),
+                    RoutePoint(latitude: -0.0, longitude: 0.0, address: "Нулевой меридиан")],
             claimID: "claim-digest")
         try database.recordOrder(order, providerObservedAt: .now)
         let stored: [[DatabaseValue]] = try database.queue.read { db in
@@ -179,9 +188,9 @@ struct SigningPrimitivesTests {
                     CanonicalPayload.values(from: $0, columns: CanonicalPayload.routeDigestColumns)
                 }
         }
-        #expect(stored.count == 2)
+        #expect(stored.count == 3)
         #expect(CanonicalPayload.routeDigest(stopValues: stored) == CanonicalPayload.routeDigest(for: order.route),
-                "same bytes by construction: the insert binds the digest's own list")
+                "same bytes by construction: the insert binds the digest's own list, and a -0.0 coordinate hashes like the stored 0.0 (review, PR #46)")
     }
 
     // MARK: Custody
