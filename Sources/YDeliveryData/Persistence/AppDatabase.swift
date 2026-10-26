@@ -139,8 +139,10 @@ public final class AppDatabase: Sendable {
         }
         // A pre-epoch store beside the new file imports first — its rows are the
         // device's history — then the JSON stores older still (they only exist on
-        // installs that never opened a SQLite store at all).
-        EpochImport.run(in: directory, into: db)
+        // installs that never opened a SQLite store at all). A copy that fails
+        // fails this open: the store is unavailable for the launch rather than
+        // open and empty, and the old file waits for the next open (review, PR #45).
+        try EpochImport.run(in: directory, into: db)
         LegacyMigration.run(
             in: directory, db: db, providerAccountRef: providerAccountRef, provider: provider)
         return db
@@ -1206,6 +1208,20 @@ public final class AppDatabase: Sendable {
                     event.routeDigest, event.authorRef,
                 ]))
             let inserted = db.changesCount > 0
+            // Not inserted means the id exists. A replay carries the stored row's
+            // own stamp; an *older* stored stamp means a different observation
+            // derived this id — without a provider revision (the pre-epoch shape,
+            // or a caller that has none) a status that returns after another one
+            // keys like its first sighting — and the mirror's word moving under it
+            // is news, not a replay (review, PR #45).
+            var collidedWithOlder = false
+            if !inserted {
+                let storedAt: Double? = try Double.fetchOne(db, sql: """
+                    SELECT "at" FROM "orderEvents" WHERE "id" = ?
+                    """, arguments: Self.args([event.id]))
+                collidedWithOlder = (storedAt ?? event.at.timeIntervalSince1970)
+                    < event.at.timeIntervalSince1970
+            }
             var statusAdvanced = false
             if event.providerStatus != nil {
                 let previous: String? = try Row.fetchOne(db, sql: """
@@ -1230,8 +1246,9 @@ public final class AppDatabase: Sendable {
                 // because a replayed row can overwrite the mirror at an equal
                 // stamp — the feed's tiebreak is arrival order — without being
                 // news: re-announcing it would ping-pong banners on a cursor
-                // reset (review, PR #7).
-                statusAdvanced = inserted && db.changesCount > 0
+                // reset (review, PR #7). A collision with an older observation is
+                // the one non-inserted case that is news (`collidedWithOlder`).
+                statusAdvanced = (inserted || collidedWithOlder) && db.changesCount > 0
                     && previous != event.providerStatus
             }
             if inserted {

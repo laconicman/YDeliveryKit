@@ -57,7 +57,8 @@ attachments (plus `dataHash`), and three new shared tables — `participantKeys`
 columns are written NULL by this version's writers; the trust layer fills them. A
 pre-epoch store found beside the new file is imported once, row for row, on the
 first open, then marked `*.imported-<t>-<id>` in place with its journals and its
-hidden sqlite-data metadatabase.
+hidden sqlite-data metadatabase. A copy that fails keeps the store unavailable for that
+launch rather than open and empty; the old file waits for the next open.
 
 One consumer-facing honesty note: the substrate never destroys bytes. A malformed
 legacy file is rescued aside as `*.corrupted-<t>-<id>.json` before the store opens;

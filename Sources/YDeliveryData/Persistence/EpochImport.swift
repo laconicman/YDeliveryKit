@@ -87,18 +87,20 @@ enum EpochImport {
     }
 
     /// Runs the import if a pre-epoch store exists in `directory`; a no-op otherwise.
-    /// Never throws: the new store opens regardless, and every failure is logged
-    /// with the old file left where the next open finds it again.
+    /// A copy failure is thrown, so the open that called this fails and the store is
+    /// unavailable for the launch — the consumer renders "could not look" rather than
+    /// acting on an empty history (review, PR #45) — while the old file stays where
+    /// the next open retries from. Two cases are rescued instead of thrown: a file
+    /// that is not a database is marked aside, since it can never import; and a
+    /// rename that fails after a successful copy is logged, since the next open's
+    /// `INSERT OR IGNORE` re-copy is a no-op and tries the rename again.
     @discardableResult
-    static func run(in directory: URL, into db: DatabaseQueue) -> Outcome? {
+    static func run(in directory: URL, into db: DatabaseQueue) throws -> Outcome? {
         let legacy = directory.appendingPathComponent(AppDatabase.legacyFilename)
         guard FileManager.default.fileExists(atPath: legacy.path) else { return nil }
+        let copied: Outcome
         do {
-            let outcome = try copy(from: legacy, into: db)
-            let marked = try markImported(in: directory)
-            logger.notice("Epoch import: \(outcome.rowsCopied) rows in \(outcome.tablesCopied) tables from \(AppDatabase.legacyFilename, privacy: .public); marked \(marked.count) files")
-            return Outcome(rowsCopied: outcome.rowsCopied, tablesCopied: outcome.tablesCopied,
-                           markedAside: marked)
+            copied = try copy(from: legacy, into: db)
         } catch let error as DatabaseError where error.resultCode == .SQLITE_NOTADB {
             // Not a database: rescue the bytes aside, collision-proof, and let the
             // store open — a file that can never import must not wedge every launch.
@@ -112,9 +114,19 @@ enum EpochImport {
             }
             return nil
         } catch {
-            logger.error("Epoch import failed; the old store stays for the next open's retry: \(error.localizedDescription, privacy: .public)")
-            return nil
+            logger.error("Epoch import failed; the store is unavailable this launch and the old store stays for the next open's retry: \(error.localizedDescription, privacy: .public)")
+            throw error
         }
+        let marked: [String]
+        do {
+            marked = try markImported(in: directory)
+        } catch {
+            logger.error("Epoch import copied \(copied.rowsCopied) rows but could not mark the old store aside; the next open re-copies (a no-op) and retries the mark: \(error.localizedDescription, privacy: .public)")
+            marked = []
+        }
+        logger.notice("Epoch import: \(copied.rowsCopied) rows in \(copied.tablesCopied) tables from \(AppDatabase.legacyFilename, privacy: .public); marked \(marked.count) files")
+        return Outcome(rowsCopied: copied.rowsCopied, tablesCopied: copied.tablesCopied,
+                       markedAside: marked)
     }
 
     /// The row copy, one transaction on the new store. The old store is opened

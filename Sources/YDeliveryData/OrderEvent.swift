@@ -70,6 +70,12 @@ public struct OrderEvent: Codable, Hashable, Identifiable, Sendable {
         public static let app = "app"
     }
 
+    /// - Parameter providerRevision: the wire's `revision` — the journal event's own,
+    ///   the claim card's — part of a sighting's identity: a re-sight of one revision
+    ///   is a no-op, a later revision a new fact. Without it (the pre-epoch shape, or
+    ///   a caller that has none) every observation of one status keys alike, so a
+    ///   status that returns after another one collapses into its first row; the
+    ///   mirror still moves and ``AppDatabase/recordEvent(_:)`` still announces it.
     /// - Parameter writerKeyID: the signing key's id, once a writer has one — it
     ///   joins the derivation so two devices recording the same fact write two
     ///   rows rather than one CloudKit record (the trust layer's rule 1).

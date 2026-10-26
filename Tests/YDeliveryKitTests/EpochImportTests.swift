@@ -157,6 +157,31 @@ struct EpochImportTests {
                 "bytes are never destroyed — rescued, not deleted")
     }
 
+    @Test("A copy that fails leaves the old store in place and fails the open")
+    func copyFailureFailsTheOpenAndKeepsTheOldStore() throws {
+        // A pre-epoch table without STRICT holds TEXT where the epoch's STRICT
+        // column takes REAL — the copy cannot land it, and must not pretend to.
+        let raw = try DatabaseQueue(path: legacyURL.path)
+        try raw.write { db in
+            try db.execute(sql: """
+                CREATE TABLE "orders" (
+                  "id" TEXT PRIMARY KEY NOT NULL, "createdAt" REAL NOT NULL,
+                  "providerAccountRef" TEXT, "provider" TEXT NOT NULL,
+                  "lastActivityAt" REAL NOT NULL
+                );
+                INSERT INTO "orders" VALUES ('\(Self.orderID)', 'not a stamp', NULL, 'yandex', 1700000000);
+                """)
+        }
+        let database = makeDatabase()
+        #expect(throws: (any Error).self, "the store is unavailable, never open and empty") {
+            try database.readOrders()
+        }
+        let listing = try directoryListing()
+        #expect(listing.contains(AppDatabase.legacyFilename), "the old store waits for the next open")
+        #expect(!listing.contains(where: { $0.contains(".imported-") || $0.contains(".corrupted-") }),
+                "nothing was marked: the copy did not happen")
+    }
+
     @Test("No pre-epoch store means no import and no marks")
     func nothingToImport() throws {
         let database = makeDatabase()
@@ -258,6 +283,36 @@ struct EpochImportTests {
                                 kind: OrderEvent.Kind.statusChanged, providerStatus: "pickuped",
                                 source: OrderEvent.Source.journal, writerKeyID: "p256.v2.0123456789abcdef")
         #expect(signed.id != journal.id, "the writer's key joins the derivation once there is one")
+    }
+
+    @Test("A status that returns without a revision announces; a replay stays silent")
+    func returningStatusWithoutRevisionAnnounces() throws {
+        let database = makeDatabase()
+        let order = Order(
+            created: .now, status: .active,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")],
+            claimID: "claim-return")
+        try database.recordOrder(order)
+        let t0 = Date(timeIntervalSince1970: 1_700_000_000)
+        let search = OrderEvent(orderID: order.id, at: t0, kind: OrderEvent.Kind.sighting,
+                                providerStatus: "accepted", source: OrderEvent.Source.search)
+        #expect(try database.recordEvent(search).statusAdvanced)
+        let journal = OrderEvent(orderID: order.id, providerEventID: 5, at: t0 + 60,
+                                 kind: OrderEvent.Kind.statusChanged, providerStatus: "pickuped",
+                                 source: OrderEvent.Source.journal)
+        #expect(try database.recordEvent(journal).statusAdvanced)
+        let card = OrderEvent(orderID: order.id, at: t0 + 120, kind: OrderEvent.Kind.sighting,
+                              providerStatus: "accepted", source: OrderEvent.Source.card)
+        #expect(card.id == search.id,
+                "without a revision the returned status keys like its first sighting")
+        let returned = try database.recordEvent(card)
+        #expect(!returned.inserted && returned.statusAdvanced,
+                "the row is swallowed, the mirror moved, and that is news")
+        #expect(try database.readOrders().first?.providerStatus == "accepted")
+        let replay = try database.recordEvent(card)
+        #expect(!replay.inserted && !replay.statusAdvanced,
+                "a replay carries the stored stamp: silent")
+        #expect(try database.events(orderID: order.id).count == 2)
     }
 
     @Test("The device's party round-trips under its authority")
