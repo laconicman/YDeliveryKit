@@ -1208,26 +1208,24 @@ public final class AppDatabase: Sendable {
                     event.routeDigest, event.authorRef,
                 ]))
             let inserted = db.changesCount > 0
-            // Not inserted means the id exists. A replay carries the stored row's
-            // own stamp; an *older* stored stamp means a different observation
-            // derived this id — without a provider revision (the pre-epoch shape,
-            // or a caller that has none) a status that returns after another one
-            // keys like its first sighting — and the mirror's word moving under it
-            // is news, not a replay (review, PR #45).
-            var collidedWithOlder = false
-            if !inserted {
-                let storedAt: Double? = try Double.fetchOne(db, sql: """
-                    SELECT "at" FROM "orderEvents" WHERE "id" = ?
-                    """, arguments: Self.args([event.id]))
-                collidedWithOlder = (storedAt ?? event.at.timeIntervalSince1970)
-                    < event.at.timeIntervalSince1970
-            }
             var statusAdvanced = false
             if event.providerStatus != nil {
-                let previous: String? = try Row.fetchOne(db, sql: """
-                    SELECT "providerStatus" FROM "orderProviderStates"
+                let stored = try Row.fetchOne(db, sql: """
+                    SELECT "providerStatus", "providerObservedAt" FROM "orderProviderStates"
                     WHERE "orderID" = ?
-                    """, arguments: Self.args([event.orderID]))?["providerStatus"]
+                    """, arguments: Self.args([event.orderID]))
+                let previous: String? = stored?["providerStatus"]
+                let observedAt: Double? = stored?["providerObservedAt"]
+                // Not inserted means the id exists. Without a provider revision (the
+                // pre-epoch shape, or a caller that has none) a status that returns
+                // after another one keys like its first sighting, and the row keeps
+                // only that first stamp — so the mirror's own stamp tells a new
+                // observation from a replay: one stamped strictly later than anything
+                // the mirror has seen is news when the word moves; one at or before
+                // that stamp is a replay, or an equal-stamp arrival whose tiebreak is
+                // arrival order and never a banner (review, PR #45 rounds 1 and 2).
+                let newObservation = inserted
+                    || (observedAt ?? -.infinity) < event.at.timeIntervalSince1970
                 try db.execute(sql: """
                     UPDATE "orderProviderStates" SET
                       "providerStatus" = ?,
@@ -1246,9 +1244,9 @@ public final class AppDatabase: Sendable {
                 // because a replayed row can overwrite the mirror at an equal
                 // stamp — the feed's tiebreak is arrival order — without being
                 // news: re-announcing it would ping-pong banners on a cursor
-                // reset (review, PR #7). A collision with an older observation is
-                // the one non-inserted case that is news (`collidedWithOlder`).
-                statusAdvanced = (inserted || collidedWithOlder) && db.changesCount > 0
+                // reset (review, PR #7). A collision stamped past the mirror's own
+                // stamp is the one non-inserted case that is news (`newObservation`).
+                statusAdvanced = newObservation && db.changesCount > 0
                     && previous != event.providerStatus
             }
             if inserted {

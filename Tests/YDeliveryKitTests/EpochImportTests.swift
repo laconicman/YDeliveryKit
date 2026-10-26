@@ -315,6 +315,36 @@ struct EpochImportTests {
         #expect(try database.events(orderID: order.id).count == 2)
     }
 
+    @Test("A replayed collided sighting at the mirror's own stamp stays silent")
+    func equalStampReplayOfACollidedSightingStaysSilent() throws {
+        // Devin, PR #45 round 2: A at 1000, A again at 1200 (collides, mirror stamp
+        // moves), B at 1200 (announces), then the A observation of 1200 replayed —
+        // its row still says 1000, but the mirror has seen 1200, so this is a
+        // replay or an equal-stamp arrival, never a banner.
+        let database = makeDatabase()
+        let order = Order(
+            created: .now, status: .active,
+            route: [RoutePoint(latitude: 55, longitude: 37, address: "А")],
+            claimID: "claim-pingpong")
+        try database.recordOrder(order)
+        let t = Date(timeIntervalSince1970: 1_000)
+        let first = OrderEvent(orderID: order.id, at: t, kind: OrderEvent.Kind.sighting,
+                               providerStatus: "A", source: OrderEvent.Source.search)
+        #expect(try database.recordEvent(first).statusAdvanced)
+        let again = OrderEvent(orderID: order.id, at: t + 200, kind: OrderEvent.Kind.sighting,
+                               providerStatus: "A", source: OrderEvent.Source.card)
+        #expect(again.id == first.id)
+        let resight = try database.recordEvent(again)
+        #expect(!resight.inserted && !resight.statusAdvanced, "the same word: not news")
+        let other = OrderEvent(orderID: order.id, providerEventID: 9, at: t + 200,
+                               kind: OrderEvent.Kind.statusChanged, providerStatus: "B",
+                               source: OrderEvent.Source.journal)
+        #expect(try database.recordEvent(other).statusAdvanced)
+        let replayed = try database.recordEvent(again)
+        #expect(!replayed.inserted && !replayed.statusAdvanced,
+                "stamped no later than the mirror has seen: a replay, silent")
+    }
+
     @Test("The device's party round-trips under its authority")
     func localIdentityRoundTrips() throws {
         let database = makeDatabase()
