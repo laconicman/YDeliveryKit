@@ -18,8 +18,19 @@ the diff-level cues and the noise filters.
   description — consumers pin tags (`minorVersion` while 0.x), so source breaks are
   minor bumps, stated, never slipped.
 - Flag an import of anything beyond Foundation / SwiftUI / SFSafeSymbols — and, in
-  `YDeliveryData`, CryptoKit for the attachment hash. A new dependency here taxes every
-  consumer and needs the README's membership argument made explicitly.
+  `YDeliveryData`, CryptoKit (the attachment hash, the P-256 signatures and digests) and
+  Security (the device key's Keychain item), each confined to the files that need it. A
+  new dependency here taxes every consumer and needs the README's membership argument
+  made explicitly.
+- Flag a signature computed over anything but the values the same statement binds — a
+  `SELECT` feeding a signature, a stored row re-read to re-sign it, a rotation or
+  "ensure" pass — and a signature pair written stale rather than NULL when custody
+  fails (the app's `Collaboration` → rule 3).
+- Flag a verdict stored in a column or reaching Codable output: verdicts are read-time
+  values beside the model (`Attested`), never fields on it (rule 5).
+- Flag a CloudKit type above the identity authority adapter, a Keychain item with
+  `kSecAttrSynchronizable` true or without an explicit accessibility, and a key store
+  that caches a failure: only a resolved key is cached (rules 4 and 8).
 - Flag `ON CONFLICT REPLACE` on any shared-tier primary key, and a bare `INSERT` on a
   fact table (`orderEvents`, `orderMessages`, `orderAttachments`, `participantKeys`,
   `memberships`, `orderRatings`) that does not state its policy — `INSERT OR IGNORE`

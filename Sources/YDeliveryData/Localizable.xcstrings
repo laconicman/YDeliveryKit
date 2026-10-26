@@ -211,6 +211,26 @@
         }
       }
     },
+    "The signature does not match the row" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Подпись не совпадает с записью"
+          }
+        }
+      }
+    },
+    "The signing key is not trusted" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ключ подписи не доверен"
+          }
+        }
+      }
+    },
     "This build cannot sync with iCloud." : {
       "localizations" : {
         "ru" : {
@@ -241,6 +261,16 @@
         }
       }
     },
+    "This row did not pass through the signing path" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Эта запись не прошла через путь подписи"
+          }
+        }
+      }
+    },
     "Waiting for payment" : {
       "localizations" : {
         "ru" : {
@@ -257,6 +287,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ждёт вашего подтверждения"
+          }
+        }
+      }
+    },
+    "Written by a participant who may not write this" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Записано участником, которому это не разрешено"
           }
         }
       }
