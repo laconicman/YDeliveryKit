@@ -63,7 +63,7 @@ struct PersistenceTests {
         let database = makeDatabase()
         try database.queue.write { db in
             try db.execute(sql: """
-                CREATE UNIQUE INDEX "eventDedup" ON "providerEvents"
+                CREATE UNIQUE INDEX "eventDedup" ON "orderEvents"
                   ("orderID", "providerEventID")
                 """)
         }
@@ -212,7 +212,7 @@ struct PersistenceTests {
         let database = makeDatabase()
         try await database.queue.write { db in
             try db.execute(sql: """
-                CREATE UNIQUE INDEX "eventDedup" ON "providerEvents"
+                CREATE UNIQUE INDEX "eventDedup" ON "orderEvents"
                   ("orderID", "providerEventID")
                 """)
         }
@@ -773,57 +773,6 @@ struct PersistenceTests {
         #expect(shared.allSatisfy { !$0 })
     }
 
-    @Test("A pre-archive orderPrivateStates table gains the column")
-    func archiveColumnMigrates() throws {
-        let raw = try DatabaseQueue(
-            path: directory.appendingPathComponent(AppDatabase.filename).path)
-        try raw.write { db in
-            try db.execute(sql: """
-                CREATE TABLE "orders" (
-                  "id" TEXT PRIMARY KEY NOT NULL,
-                  "createdAt" REAL NOT NULL, "providerAccountRef" TEXT,
-                  "provider" TEXT NOT NULL, "lastActivityAt" REAL NOT NULL
-                ) STRICT;
-                CREATE TABLE "orderPrivateStates" (
-                  "orderID" TEXT PRIMARY KEY NOT NULL
-                    REFERENCES "orders"("id") ON DELETE CASCADE,
-                  "personalNote" TEXT, "pinned" INTEGER NOT NULL,
-                  "lastSeenActivityAt" REAL
-                ) STRICT;
-                INSERT INTO "orders"
-                  ("id", "createdAt", "provider", "lastActivityAt")
-                VALUES ('00000000-0000-0000-0000-0000000000d1', 1.7e9, 'yandex', 1.7e9);
-                INSERT INTO "orderPrivateStates"
-                  ("orderID", "personalNote", "pinned")
-                VALUES ('00000000-0000-0000-0000-0000000000d1', 'заметка', 1);
-                """)
-        }
-
-        let database = makeDatabase()
-        let columns = try database.queue.read { db in
-            try String.fetchAll(db, sql: """
-                SELECT "name" FROM pragma_table_info('orderPrivateStates')
-                """)
-        }
-        #expect(columns.contains("archivedAt"), "the late column arrived by ALTER")
-
-        // The pre-existing row survives the ALTER — its pin and note are intact
-        // and a later archive write lands beside them.
-        try database.setArchived(true,
-                                 orderID: UUID(
-                                    uuidString: "00000000-0000-0000-0000-0000000000d1")!)
-        let row = try #require(database.queue.read { db in
-            try Row.fetchOne(db, sql: """
-                SELECT "personalNote", "pinned", "archivedAt"
-                FROM "orderPrivateStates"
-                WHERE "orderID" = '00000000-0000-0000-0000-0000000000d1'
-                """)
-        })
-        #expect(row["personalNote"] as String == "заметка")
-        #expect(row["pinned"] as Int == 1)
-        #expect(row["archivedAt"] as Double? != nil)
-    }
-
     /// The file store prepended a re-recorded order; `lastActivityAt` carries that
     /// semantic into the contract — a touched order surfaces, never sinks.
     @Test("A re-recorded older order returns to the top of history")
@@ -1050,65 +999,6 @@ struct PersistenceTests {
                 "a point the provider never reported on carries no visit box")
     }
 
-    /// The visit columns land on databases born before them: guarded ALTERs,
-    /// existing stop rows intact, the new fields reading absent.
-    @Test("A pre-visit routeStops table gains the columns, stops intact")
-    func visitColumnsMigrate() throws {
-        let raw = try DatabaseQueue(
-            path: directory.appendingPathComponent(AppDatabase.filename).path)
-        try raw.write { db in
-            try db.execute(sql: """
-                CREATE TABLE "orders" (
-                  "id" TEXT PRIMARY KEY NOT NULL,
-                  "createdAt" REAL NOT NULL,
-                  "providerAccountRef" TEXT,
-                  "provider" TEXT NOT NULL,
-                  "lastActivityAt" REAL NOT NULL
-                ) STRICT;
-                CREATE TABLE "routeStops" (
-                  "id" TEXT PRIMARY KEY NOT NULL,
-                  "orderID" TEXT NOT NULL
-                    REFERENCES "orders"("id") ON DELETE CASCADE,
-                  "position" INTEGER NOT NULL, "role" TEXT NOT NULL,
-                  "latitude" REAL NOT NULL, "longitude" REAL NOT NULL,
-                  "address" TEXT NOT NULL,
-                  "entrance" TEXT, "floor" TEXT, "apartment" TEXT, "intercom" TEXT,
-                  "contactName" TEXT, "contactGivenName" TEXT, "contactFamilyName" TEXT,
-                  "contactPhone" TEXT, "contactPhoneExtension" TEXT
-                ) STRICT;
-                INSERT INTO "orders"
-                  ("id", "createdAt", "provider", "lastActivityAt")
-                VALUES ('00000000-0000-0000-0000-000000000001',
-                        1700000000, 'test', 1700000000);
-                INSERT INTO "routeStops"
-                  ("id", "orderID", "position", "role",
-                   "latitude", "longitude", "address")
-                VALUES ('00000000-0000-0000-0000-000000000002',
-                        '00000000-0000-0000-0000-000000000001',
-                        0, 'pickup', 55, 37, 'Москворечье, 6');
-                """)
-        }
-
-        let database = makeDatabase()
-        let columns = try database.queue.read { db in
-            try String.fetchAll(db, sql: """
-                SELECT "name" FROM pragma_table_info('routeStops')
-                """)
-        }
-        #expect(columns.contains("visitStatus")
-                && columns.contains("visitedAt")
-                && columns.contains("expectedVisitAt"),
-                "the three visit columns all arrived")
-        #expect(columns.contains("building"),
-                "the door-details set grew the корпус column (YD-10)")
-
-        let stored = try #require(database.readOrders().first)
-        #expect(stored.route.first?.address == "Москворечье, 6",
-                "the pre-existing stop survived the ALTER")
-        #expect(stored.route.first?.visit == nil,
-                "a row written before visits reads them absent")
-    }
-
     /// The visit columns obey the same rule as the courier mirror one level up
     /// (review, PR #10): an unstamped write is a *local* edit, and an in-memory
     /// copy from before the last sighting — or one whose points carry a stale
@@ -1240,122 +1130,6 @@ struct PersistenceTests {
         ])
         // No definitions: the fieldRef fallback sorts — 'A1' < 'B2' wins.
         #expect(try database.orderNumber(for: order.id) == "A")
-    }
-
-    /// The `carrier` backfill: a database whose values were written before the
-    /// column existed still resolves its numbers — the ALTER fills them from
-    /// the schema that typed them.
-    @Test("The carrier column backfills pre-existing values from the schema")
-    func carrierBackfillsOnMigration() throws {
-        let orderID = UUID(uuidString: "00000000-0000-0000-0000-0000000000C1")!
-        let fieldRef = UUID(uuidString: "00000000-0000-0000-0000-0000000000D1")!
-        // The store's TEXT id columns hold the lowercase form (`args` folds) —
-        // a fixture row must spell them the same or the joins never meet.
-        let raw = try DatabaseQueue(
-            path: directory.appendingPathComponent(AppDatabase.filename).path)
-        try raw.write { db in
-            try db.execute(sql: """
-                CREATE TABLE "orders" (
-                  "id" TEXT PRIMARY KEY NOT NULL,
-                  "createdAt" REAL NOT NULL,
-                  "providerAccountRef" TEXT,
-                  "provider" TEXT NOT NULL,
-                  "lastActivityAt" REAL NOT NULL
-                ) STRICT;
-                CREATE TABLE "orderCustomFields" (
-                  "id" TEXT PRIMARY KEY NOT NULL,
-                  "orderID" TEXT NOT NULL,
-                  "fieldRef" TEXT NOT NULL, "name" TEXT NOT NULL, "value" TEXT NOT NULL
-                ) STRICT;
-                CREATE TABLE "customFieldDefinitions" (
-                  "id" TEXT PRIMARY KEY NOT NULL,
-                  "name" TEXT NOT NULL, "kind" TEXT NOT NULL,
-                  "choicesJSON" TEXT NOT NULL,
-                  "isOptional" INTEGER NOT NULL, "isShownByDefault" INTEGER NOT NULL,
-                  "carrier" TEXT NOT NULL, "position" INTEGER NOT NULL
-                ) STRICT;
-                INSERT INTO "orders"
-                  ("id", "createdAt", "provider", "lastActivityAt")
-                VALUES ('\(orderID.uuidString.lowercased())',
-                        1700000000, 'test', 1700000000);
-                INSERT INTO "customFieldDefinitions"
-                  ("id", "name", "kind", "choicesJSON",
-                   "isOptional", "isShownByDefault", "carrier", "position")
-                VALUES ('\(fieldRef.uuidString.lowercased())', 'Заказ', 'text',
-                        '[]', 1, 1, 'orderNumber', 0);
-                INSERT INTO "orderCustomFields"
-                  ("id", "orderID", "fieldRef", "name", "value")
-                VALUES ('00000000-0000-0000-0000-0000000000e1',
-                        '\(orderID.uuidString.lowercased())',
-                        '\(fieldRef.uuidString.lowercased())',
-                        'Заказ', '4417');
-                """)
-        }
-
-        let database = makeDatabase()
-        #expect(try database.orderNumber(for: orderID) == "4417",
-                "the pre-column value answers through its backfilled carrier")
-    }
-
-    /// The first column migration: a database born before the courier columns
-    /// gets them via guarded `ALTER TABLE`, its rows survive, and reopening the
-    /// same file is a no-op — the pragma check, not luck, makes it idempotent.
-    @Test("A pre-migration database gains the courier columns, rows intact")
-    func columnMigrationAddsToExistingDatabase() throws {
-        // The file as it stood before the columns landed — old table shape,
-        // one live row that must survive the ALTER.
-        let raw = try DatabaseQueue(
-            path: directory.appendingPathComponent(AppDatabase.filename).path)
-        try raw.write { db in
-            try db.execute(sql: """
-                CREATE TABLE "orders" (
-                  "id" TEXT PRIMARY KEY NOT NULL,
-                  "createdAt" REAL NOT NULL,
-                  "providerAccountRef" TEXT,
-                  "provider" TEXT NOT NULL,
-                  "lastActivityAt" REAL NOT NULL
-                ) STRICT;
-                CREATE TABLE "orderProviderStates" (
-                  "orderID" TEXT PRIMARY KEY NOT NULL
-                    REFERENCES "orders"("id") ON DELETE CASCADE,
-                  "claimID" TEXT, "corpClientID" TEXT, "status" TEXT NOT NULL,
-                  "providerStatus" TEXT, "providerDetail" TEXT,
-                  "tariff" TEXT, "price" TEXT, "currency" TEXT,
-                  "dueAt" REAL, "finishedAt" REAL,
-                  "providerObservedAt" REAL, "mirroredAt" REAL NOT NULL
-                ) STRICT;
-                INSERT INTO "orders"
-                  ("id", "createdAt", "provider", "lastActivityAt")
-                VALUES ('00000000-0000-0000-0000-000000000001',
-                        1700000000, 'test', 1700000000);
-                INSERT INTO "orderProviderStates"
-                  ("orderID", "status", "mirroredAt")
-                VALUES ('00000000-0000-0000-0000-000000000001',
-                        'active', 1700000000);
-                """)
-        }
-
-        let database = makeDatabase()
-        let columns = try database.queue.read { db in
-            try String.fetchAll(db, sql: """
-                SELECT "name" FROM pragma_table_info('orderProviderStates')
-                """)
-        }
-        #expect(columns.contains("courierName")
-                && columns.contains("courierVehicle")
-                && columns.contains("etaMinutes"),
-                "the three late columns all arrived")
-
-        let stored = try database.readOrders()
-        #expect(stored.count == 1, "the pre-existing row survived the ALTER")
-        #expect(stored.first?.status == .active)
-
-        // Reopening is a no-op — the pragma guard absorbs the repeat.
-        _ = try makeDatabase().queue.read { db in
-            try String.fetchAll(db, sql: """
-                SELECT "name" FROM pragma_table_info('orderProviderStates')
-                """)
-        }
     }
 
     // MARK: Saved places — the editor's semantics
@@ -1555,53 +1329,6 @@ struct PersistenceTests {
         #expect(names.contains { $0.hasSuffix(":parcelTemplates") })
         #expect(names.contains { $0.hasSuffix(":parcelTemplateItems") },
                 "the items child syncs privately beside its root")
-    }
-
-    /// A database born before the library gains `pinned` by the guarded ALTER —
-    /// the pragma check, not luck; its rows read unpinned.
-    @Test("A pre-pin savedPlaces table gains the column, places kept")
-    func placePinMigrates() throws {
-        let raw = try DatabaseQueue(
-            path: directory.appendingPathComponent(AppDatabase.filename).path)
-        try raw.write { db in
-            try db.execute(sql: """
-                CREATE TABLE "savedPlaces" (
-                  "id" TEXT PRIMARY KEY NOT NULL,
-                  "name" TEXT NOT NULL, "kind" TEXT NOT NULL,
-                  "latitude" REAL NOT NULL, "longitude" REAL NOT NULL,
-                  "address" TEXT NOT NULL,
-                  "building" TEXT,
-                  "entrance" TEXT, "floor" TEXT, "apartment" TEXT,
-                  "intercom" TEXT,
-                  "contactName" TEXT, "contactGivenName" TEXT,
-                  "contactFamilyName" TEXT,
-                  "contactPhone" TEXT, "contactPhoneExtension" TEXT
-                ) STRICT;
-                INSERT INTO "savedPlaces"
-                  ("id", "name", "kind", "latitude", "longitude", "address")
-                VALUES ('00000000-0000-0000-0000-0000000000d1',
-                        'Дом', 'home', 55, 37, 'Тверская, 6');
-                """)
-        }
-
-        let database = makeDatabase()
-        let columns = try database.queue.read { db in
-            try String.fetchAll(db, sql: """
-                SELECT "name" FROM pragma_table_info('savedPlaces')
-                """)
-        }
-        #expect(columns.contains("pinned"), "the late column arrived by ALTER")
-
-        let stored = try #require(database.readPlaces().first)
-        #expect(stored.name == "Дом" && !stored.pinned,
-                "a pre-pin row survives and reads unpinned")
-
-        // Reopening is a no-op — the pragma guard absorbs the repeat.
-        _ = try makeDatabase().queue.read { db in
-            try String.fetchAll(db, sql: """
-                SELECT "name" FROM pragma_table_info('savedPlaces')
-                """)
-        }
     }
 
     /// The file-store contract: `places.json`/`saved-places.json` written before
@@ -2028,14 +1755,14 @@ struct PersistenceTests {
             route: [RoutePoint(latitude: 55, longitude: 37, address: "А")],
             claimID: "claim-e")
         try database.recordOrder(order)
-        let event = ProviderEvent(
+        let event = OrderEvent(
             orderID: order.id, providerEventID: 7, at: .now,
             kind: "status", providerStatus: "performer_found", source: "journal")
 
-        #expect(try database.recordProviderEvent(event).inserted)
-        #expect(try !database.recordProviderEvent(event).inserted,
+        #expect(try database.recordEvent(event).inserted)
+        #expect(try !database.recordEvent(event).inserted,
                 "a replayed feed id merges by key — the notification layer reads false as silence")
-        #expect(try database.providerEvents(orderID: order.id).count == 1)
+        #expect(try database.events(orderID: order.id).count == 1)
     }
 
     /// The notification layer's question, answered by the database: did this
@@ -2051,42 +1778,42 @@ struct PersistenceTests {
             claimID: "claim-t")
         try database.recordOrder(order)
 
-        let found = ProviderEvent(
+        let found = OrderEvent(
             orderID: order.id, providerEventID: 1,
             at: Date(timeIntervalSince1970: 1000),
             kind: "status", providerStatus: "performer_found", source: "journal")
-        #expect(try database.recordProviderEvent(found) ==
-                ProviderEventOutcome(inserted: true, statusAdvanced: true),
+        #expect(try database.recordEvent(found) ==
+                OrderEventOutcome(inserted: true, statusAdvanced: true),
                 "a new status word advances the mirror")
-        #expect(try database.recordProviderEvent(found) ==
-                ProviderEventOutcome(inserted: false, statusAdvanced: false),
+        #expect(try database.recordEvent(found) ==
+                OrderEventOutcome(inserted: false, statusAdvanced: false),
                 "the replay inserts nothing and announces nothing")
 
         // The same word sighted through a different feed is a *new timeline
         // row* — dedupe is per (status, source) — but not a new status:
         // «courier found» must not banner twice because search saw it too.
-        #expect(try database.recordProviderEvent(ProviderEvent(
+        #expect(try database.recordEvent(OrderEvent(
             orderID: order.id,
             at: Date(timeIntervalSince1970: 1200),
             kind: "sighting", providerStatus: "performer_found", source: "search")) ==
-                ProviderEventOutcome(inserted: true, statusAdvanced: false),
+                OrderEventOutcome(inserted: true, statusAdvanced: false),
                 "the same word from another feed lands on the timeline silently")
 
         // A stale event is history — it inserts, it does not announce.
-        #expect(try database.recordProviderEvent(ProviderEvent(
+        #expect(try database.recordEvent(OrderEvent(
             orderID: order.id, providerEventID: 0,
             at: Date(timeIntervalSince1970: 500),
             kind: "status", providerStatus: "accepted", source: "journal")) ==
-                ProviderEventOutcome(inserted: true, statusAdvanced: false),
+                OrderEventOutcome(inserted: true, statusAdvanced: false),
                 "an event older than the mirror's observation is timeline-only")
 
         // And a genuinely new word through the sighting path fires — the
         // journal's gap is exactly what sightings backstop.
-        #expect(try database.recordProviderEvent(ProviderEvent(
+        #expect(try database.recordEvent(OrderEvent(
             orderID: order.id,
             at: Date(timeIntervalSince1970: 1400),
             kind: "sighting", providerStatus: "delivery_arrived", source: "card")) ==
-                ProviderEventOutcome(inserted: true, statusAdvanced: true))
+                OrderEventOutcome(inserted: true, statusAdvanced: true))
     }
 
     /// Two transitions stamped at the same instant both belong on the timeline,
@@ -2103,23 +1830,23 @@ struct PersistenceTests {
         try database.recordOrder(order)
 
         let t = Date(timeIntervalSince1970: 1000)
-        let accepted = ProviderEvent(
+        let accepted = OrderEvent(
             orderID: order.id, providerEventID: 1, at: t,
             kind: "status", providerStatus: "accepted", source: "journal")
-        let found = ProviderEvent(
+        let found = OrderEvent(
             orderID: order.id, providerEventID: 2, at: t,
             kind: "status", providerStatus: "performer_found", source: "journal")
 
-        #expect(try database.recordProviderEvent(accepted).statusAdvanced)
-        #expect(try database.recordProviderEvent(found).statusAdvanced,
+        #expect(try database.recordEvent(accepted).statusAdvanced)
+        #expect(try database.recordEvent(found).statusAdvanced,
                 "a genuinely new word announces even at an equal stamp")
 
         // Cursor-reset replay: both rows dedupe — neither can announce again.
-        #expect(try database.recordProviderEvent(accepted) ==
-                ProviderEventOutcome(inserted: false, statusAdvanced: false),
+        #expect(try database.recordEvent(accepted) ==
+                OrderEventOutcome(inserted: false, statusAdvanced: false),
                 "replaying the first equal-time word must not re-announce it")
-        #expect(try database.recordProviderEvent(found) ==
-                ProviderEventOutcome(inserted: false, statusAdvanced: false))
+        #expect(try database.recordEvent(found) ==
+                OrderEventOutcome(inserted: false, statusAdvanced: false))
 
         // Replays arrive in feed order, so the equal-time tie resolves the same
         // way every pass — the mirror lands on the last feed word, unchanged.
@@ -2141,7 +1868,7 @@ struct PersistenceTests {
             claimID: "claim-m")
         try database.recordOrder(order)
 
-        try database.recordProviderEvent(ProviderEvent(
+        try database.recordEvent(OrderEvent(
             orderID: order.id, providerEventID: 3,
             at: Date(timeIntervalSince1970: 1000),
             kind: "status", providerStatus: "delivery_arrived", source: "journal"))
@@ -2149,11 +1876,11 @@ struct PersistenceTests {
         // timeline — dedupe is per-key — but the mirror only moves forward: the
         // order was already sighted at 1000, so 900 must not regress it
         // (review, PR #6).
-        try database.recordProviderEvent(ProviderEvent(
+        try database.recordEvent(OrderEvent(
             orderID: order.id, providerEventID: 2,
             at: Date(timeIntervalSince1970: 900),
             kind: "status", providerStatus: "pickuped", source: "journal"))
-        #expect(try database.providerEvents(orderID: order.id).map(\.providerStatus)
+        #expect(try database.events(orderID: order.id).map(\.providerStatus)
                 == ["pickuped", "delivery_arrived"],
                 "events read oldest-first by stamp, not by arrival")
 
@@ -2183,16 +1910,16 @@ struct PersistenceTests {
             claimID: "claim-s")
         try database.recordOrder(order)
 
-        try database.recordProviderEvent(ProviderEvent(
+        try database.recordEvent(OrderEvent(
             orderID: order.id, at: Date(timeIntervalSince1970: 1000),
             kind: "status", providerStatus: "delivery_arrived",
             detail: "courier waiting", source: "card"))
-        #expect(try !database.recordProviderEvent(ProviderEvent(
+        #expect(try !database.recordEvent(OrderEvent(
             orderID: order.id, at: Date(timeIntervalSince1970: 1300),
             kind: "status", providerStatus: "delivery_arrived",
             detail: "courier called", source: "card")).inserted,
                 "same status from the same source is the same sighting — no second row")
-        #expect(try database.providerEvents(orderID: order.id).count == 1)
+        #expect(try database.events(orderID: order.id).count == 1)
 
         let mirror: Row? = try database.queue.read { db in
             try Row.fetchOne(db, sql: """
@@ -2218,12 +1945,12 @@ struct PersistenceTests {
             claimID: "claim-p")
         try database.recordOrder(order)
 
-        try database.recordProviderEvent(ProviderEvent(
+        try database.recordEvent(OrderEvent(
             orderID: order.id, providerEventID: 1,
             at: Date(timeIntervalSince1970: 1000),
             kind: "status", providerStatus: "pickuped",
             detail: "courier collected parcel", source: "journal"))
-        try database.recordProviderEvent(ProviderEvent(
+        try database.recordEvent(OrderEvent(
             orderID: order.id, providerEventID: 2,
             at: Date(timeIntervalSince1970: 1100),
             kind: "price", detail: "850 RUB", source: "journal"))
@@ -2240,7 +1967,7 @@ struct PersistenceTests {
         #expect(detail == "courier collected parcel",
                 "the price event's detail is not the status's detail")
         // …while the timeline keeps it — the feed lost nothing.
-        #expect(try database.providerEvents(orderID: order.id).map(\.kind)
+        #expect(try database.events(orderID: order.id).map(\.kind)
                 == ["status", "price"])
     }
 
@@ -2256,10 +1983,10 @@ struct PersistenceTests {
         let later = Date.now.addingTimeInterval(60)
         let earlier = Date.now.addingTimeInterval(-3600)
 
-        try database.recordProviderEvent(ProviderEvent(
+        try database.recordEvent(OrderEvent(
             orderID: order.id, providerEventID: 1,
             at: later, kind: "status", source: "journal"))
-        try database.recordProviderEvent(ProviderEvent(
+        try database.recordEvent(OrderEvent(
             orderID: order.id, providerEventID: 2,
             at: earlier, kind: "status", source: "journal"))
 
@@ -2360,7 +2087,7 @@ struct PersistenceTests {
         try database.recordOrder(order)
         try await database.queue.write { db in
             try db.execute(sql: """
-                CREATE UNIQUE INDEX "shareFailDedup" ON "providerEvents"
+                CREATE UNIQUE INDEX "shareFailDedup" ON "orderEvents"
                   ("orderID", "providerEventID")
                 """)
         }

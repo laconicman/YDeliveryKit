@@ -2,7 +2,7 @@ import SFSafeSymbols
 import SwiftUI
 
 /// The provider's own account of an order, one line per change — the words the
-/// journal keeps (`ProviderEvent.providerStatus`, phrased by `ProviderStatusPhrase`),
+/// journal keeps (`OrderEvent.providerStatus`, phrased by `ProviderStatusPhrase`),
 /// oldest first, the latest emphasised. It reads what the sync engine already
 /// stores and nothing rendered before: the history list's expanded row and the
 /// order detail both show the collapsed status; this is the trail behind it.
@@ -40,7 +40,7 @@ public struct StatusTimeline: View {
         /// choice (a `LocalizedStringResource`, a status glyph), while the pure input
         /// — `ProviderStatusPhrase` — already sits in the data target. The day a
         /// non-UI consumer (a snapshot renderer) needs the fold, it moves down.
-        public static func entries(from events: [ProviderEvent]) -> [Entry] {
+        public static func entries(from events: [OrderEvent]) -> [Entry] {
             var out: [Entry] = []
             var lastPhrase: String?
             for event in events.sorted(by: { $0.at < $1.at }) {
@@ -87,7 +87,7 @@ public struct StatusTimeline: View {
         self.entries = entries
     }
 
-    public init(events: [ProviderEvent]) {
+    public init(events: [OrderEvent]) {
         self.init(entries: Entry.entries(from: events))
     }
 
@@ -171,13 +171,13 @@ public struct StatusTimeline: View {
     let t0 = Date(timeIntervalSince1970: 1_800_000_000)
     let order = UUID()
     StatusTimeline(events: [
-        ProviderEvent(orderID: order, providerEventID: 1, at: t0, kind: "status", providerStatus: "new", source: "journal"),
-        ProviderEvent(orderID: order, providerEventID: 2, at: t0 + 40, kind: "status", providerStatus: "accepted", source: "journal"),
-        ProviderEvent(orderID: order, providerEventID: 3, at: t0 + 131, kind: "status", providerStatus: "performer_lookup", source: "journal"),
-        ProviderEvent(orderID: order, providerEventID: 4, at: t0 + 420, kind: "status", providerStatus: "performer_found", source: "journal"),
-        ProviderEvent(orderID: order, providerEventID: 5, at: t0 + 1_200, kind: "status", providerStatus: "pickuped", source: "journal"),
-        ProviderEvent(orderID: order, at: t0 + 1_260, kind: "status", providerStatus: "pickuped", source: "search"),
-        ProviderEvent(orderID: order, providerEventID: 6, at: t0 + 2_300, kind: "status", providerStatus: "delivery_arrived", source: "journal"),
+        OrderEvent(orderID: order, providerEventID: 1, at: t0, kind: "status", providerStatus: "new", source: "journal"),
+        OrderEvent(orderID: order, providerEventID: 2, at: t0 + 40, kind: "status", providerStatus: "accepted", source: "journal"),
+        OrderEvent(orderID: order, providerEventID: 3, at: t0 + 131, kind: "status", providerStatus: "performer_lookup", source: "journal"),
+        OrderEvent(orderID: order, providerEventID: 4, at: t0 + 420, kind: "status", providerStatus: "performer_found", source: "journal"),
+        OrderEvent(orderID: order, providerEventID: 5, at: t0 + 1_200, kind: "status", providerStatus: "pickuped", source: "journal"),
+        OrderEvent(orderID: order, at: t0 + 1_260, kind: "status", providerStatus: "pickuped", source: "search"),
+        OrderEvent(orderID: order, providerEventID: 6, at: t0 + 2_300, kind: "status", providerStatus: "delivery_arrived", source: "journal"),
     ])
     .padding()
 }
@@ -186,9 +186,9 @@ public struct StatusTimeline: View {
     let t0 = Date(timeIntervalSince1970: 1_800_000_000)
     let order = UUID()
     StatusTimeline(events: [
-        ProviderEvent(orderID: order, providerEventID: 1, at: t0, kind: "status", providerStatus: "accepted", source: "journal"),
-        ProviderEvent(orderID: order, providerEventID: 2, at: t0 + 900, kind: "status", providerStatus: "pickuped", source: "journal"),
-        ProviderEvent(orderID: order, providerEventID: 3, at: t0 + 3_000, kind: "status", providerStatus: "delivered_finish", source: "journal"),
+        OrderEvent(orderID: order, providerEventID: 1, at: t0, kind: "status", providerStatus: "accepted", source: "journal"),
+        OrderEvent(orderID: order, providerEventID: 2, at: t0 + 900, kind: "status", providerStatus: "pickuped", source: "journal"),
+        OrderEvent(orderID: order, providerEventID: 3, at: t0 + 3_000, kind: "status", providerStatus: "delivered_finish", source: "journal"),
     ])
     .padding()
 }
@@ -197,17 +197,17 @@ public struct StatusTimeline: View {
     let monday = Date(timeIntervalSince1970: 1_800_000_000)
     let order = UUID()
     StatusTimeline(events: [
-        ProviderEvent(orderID: order, providerEventID: 1, at: monday, kind: "status", providerStatus: "accepted", source: "journal"),
-        ProviderEvent(orderID: order, providerEventID: 2, at: monday + 3_600, kind: "status", providerStatus: "performer_not_found", source: "journal"),
-        ProviderEvent(orderID: order, providerEventID: 3, at: monday + 86_400, kind: "status", providerStatus: "performer_lookup", source: "journal"),
-        ProviderEvent(orderID: order, providerEventID: 4, at: monday + 90_000, kind: "status", providerStatus: "performer_found", source: "journal"),
+        OrderEvent(orderID: order, providerEventID: 1, at: monday, kind: "status", providerStatus: "accepted", source: "journal"),
+        OrderEvent(orderID: order, providerEventID: 2, at: monday + 3_600, kind: "status", providerStatus: "performer_not_found", source: "journal"),
+        OrderEvent(orderID: order, providerEventID: 3, at: monday + 86_400, kind: "status", providerStatus: "performer_lookup", source: "journal"),
+        OrderEvent(orderID: order, providerEventID: 4, at: monday + 90_000, kind: "status", providerStatus: "performer_found", source: "journal"),
     ])
     .padding()
 }
 
 #Preview("An unknown word still keeps its time") {
     StatusTimeline(events: [
-        ProviderEvent(orderID: UUID(), providerEventID: 1, at: .now, kind: "status", providerStatus: "some_future_status", source: "journal"),
+        OrderEvent(orderID: UUID(), providerEventID: 1, at: .now, kind: "status", providerStatus: "some_future_status", source: "journal"),
     ])
     .padding()
 }

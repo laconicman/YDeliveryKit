@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import GRDB
 import OSLog
@@ -14,7 +15,13 @@ import SQLiteData
 /// `syncEngine`, never by re-listing tables). Extension targets share this same code —
 /// they read and write but never call ``startSync()`` (the engine stays lazy).
 public final class AppDatabase: Sendable {
-    public static let filename = "ydelivery.sqlite"
+    /// The epoch-2 store (doc:Schema → "Epoch 2"). A store from before the epoch
+    /// (``legacyFilename``) is imported into it once, on first open, and marked in
+    /// place — bytes are never destroyed.
+    public static let filename = "ydelivery-2.sqlite"
+    /// The pre-epoch store's name — what ``EpochImport`` looks for beside the new
+    /// file, and the stem of the sidecars it marks as imported.
+    public static let legacyFilename = "ydelivery.sqlite"
 
     private static let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "YDelivery", category: "persistence")
@@ -130,6 +137,10 @@ public final class AppDatabase: Sendable {
                 }
             }
         }
+        // A pre-epoch store beside the new file imports first — its rows are the
+        // device's history — then the JSON stores older still (they only exist on
+        // installs that never opened a SQLite store at all).
+        EpochImport.run(in: directory, into: db)
         LegacyMigration.run(
             in: directory, db: db, providerAccountRef: providerAccountRef, provider: provider)
         return db
@@ -150,9 +161,10 @@ public final class AppDatabase: Sendable {
                         for: queue,
                         tables: OrderRow.self, OrderProviderStateRow.self,
                             OrderOptionsRow.self, RouteStopRow.self, OrderItemRow.self,
-                            OrderCustomFieldRow.self, ProviderEventRow.self,
+                            OrderCustomFieldRow.self, OrderEventRow.self,
                             OrderMessageRow.self,
                             OrderAttachmentRow.self, AttachmentBlobRow.self,
+                            ParticipantKeyRow.self, MembershipRow.self, OrderRatingRow.self,
                         privateTables: ProviderAccountRow.self, OrderPrivateStateRow.self,
                             SavedPlaceRow.self, CustomFieldDefinitionRow.self,
                             ParcelTemplateRow.self, ParcelTemplateItemRow.self,
@@ -1175,17 +1187,23 @@ public final class AppDatabase: Sendable {
     /// previous observation's, and a non-status event's detail never poses as
     /// the status's own. `lastActivityAt` moves forward only.
     @discardableResult
-    public func recordProviderEvent(_ event: ProviderEvent) throws -> ProviderEventOutcome {
+    public func recordEvent(_ event: OrderEvent) throws -> OrderEventOutcome {
         try queue.write { db in
+            // A fact: `INSERT OR IGNORE` stated in the statement, never a column's
+            // REPLACE clause (doc:Schema → "Primary keys"). The signing triple is
+            // written NULL until the trust layer signs what it binds.
             try db.execute(sql: """
-                INSERT OR IGNORE INTO "providerEvents"
-                  ("id", "orderID", "providerEventID", "at", "kind",
-                   "providerStatus", "detail", "source")
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT OR IGNORE INTO "orderEvents"
+                  ("id", "orderID", "legRef", "providerEventID", "providerRevision",
+                   "at", "kind", "providerStatus", "detail", "source", "routeDigest",
+                   "authorRef", "signingKeyID", "signature")
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
                 """, arguments: Self.args([
-                    event.id, event.orderID, event.providerEventID,
+                    event.id, event.orderID, event.legRef, event.providerEventID,
+                    event.providerRevision,
                     event.at.timeIntervalSince1970, event.kind,
                     event.providerStatus, event.detail, event.source,
+                    event.routeDigest, event.authorRef,
                 ]))
             let inserted = db.changesCount > 0
             var statusAdvanced = false
@@ -1222,32 +1240,49 @@ public final class AppDatabase: Sendable {
                     WHERE "id" = ?
                     """, arguments: Self.args([event.at.timeIntervalSince1970, event.orderID]))
             }
-            return ProviderEventOutcome(
+            return OrderEventOutcome(
                 inserted: inserted, statusAdvanced: statusAdvanced)
         }
     }
 
-    /// One order's provider history, oldest first — the timeline the detail view
-    /// and the notification audit trail both read.
-    public func providerEvents(orderID: Order.ID) throws -> [ProviderEvent] {
+    /// The pre-epoch name of ``recordEvent(_:)`` — source-compatible for one minor.
+    @available(*, deprecated, renamed: "recordEvent(_:)")
+    @discardableResult
+    public func recordProviderEvent(_ event: OrderEvent) throws -> OrderEventOutcome {
+        try recordEvent(event)
+    }
+
+    /// One order's history, oldest first — the timeline the detail view and the
+    /// notification audit trail both read.
+    public func events(orderID: Order.ID) throws -> [OrderEvent] {
         try queue.read { db in
             try Row.fetchAll(db, sql: """
-                SELECT * FROM "providerEvents"
+                SELECT * FROM "orderEvents"
                 WHERE "orderID" = ? ORDER BY "at", "id"
-                """, arguments: Self.args([orderID])).map(Self.providerEvent)
+                """, arguments: Self.args([orderID])).map(Self.orderEvent)
         }
     }
 
-    private static func providerEvent(_ row: Row) -> ProviderEvent {
-        ProviderEvent(
+    /// The pre-epoch name of ``events(orderID:)`` — source-compatible for one minor.
+    @available(*, deprecated, renamed: "events(orderID:)")
+    public func providerEvents(orderID: Order.ID) throws -> [OrderEvent] {
+        try events(orderID: orderID)
+    }
+
+    private static func orderEvent(_ row: Row) -> OrderEvent {
+        OrderEvent(
             id: row["id"],
             orderID: row["orderID"],
+            legRef: row["legRef"],
             providerEventID: row["providerEventID"],
+            providerRevision: row["providerRevision"],
             at: Date(timeIntervalSince1970: row["at"]),
             kind: row["kind"],
             providerStatus: row["providerStatus"],
             detail: row["detail"],
-            source: row["source"])
+            source: row["source"],
+            routeDigest: row["routeDigest"],
+            authorRef: row["authorRef"])
     }
 
     // MARK: - Chat (shared tier)
@@ -1262,8 +1297,9 @@ public final class AppDatabase: Sendable {
     /// The write bumps no `lastActivityAt`: that column is the owner's
     /// provider-activity stamp by contract, and list ordering derives the
     /// message's recency from `sentAt` at read. The stream stays append-only —
-    /// a caller's retry posts the same id, which the table's `REPLACE`
-    /// conflict default folds back into the same row.
+    /// a caller's retry posts the same id, and the statement's `INSERT OR
+    /// IGNORE` leaves the first row standing (no shared key carries a REPLACE
+    /// clause since the epoch — doc:Schema → "Primary keys").
     public func postMessage(_ message: OrderMessage) throws {
         try queue.write { db in
             let orderExists = try Row.fetchOne(db, sql: """
@@ -1297,10 +1333,13 @@ public final class AppDatabase: Sendable {
         orderID: Order.ID, data: Data, sentAt: Date = Date(),
         caption: String? = nil, authorHint: String? = nil
     ) throws -> OrderMessage {
+        // The hash is computed before the transaction and travels with the row:
+        // the asset itself is a CKAsset nobody signs, the hash is what binds it
+        // (YD-42).
         let attachment = OrderAttachment(
             orderID: orderID, caption: caption,
             byteSize: Int64(data.count), createdAt: sentAt,
-            authorHint: authorHint)
+            authorHint: authorHint, dataHash: Self.dataHash(of: data))
         let message = OrderMessage(
             orderID: orderID, sentAt: sentAt, kind: OrderMessage.Kind.photo,
             text: caption, attachmentRef: attachment.id, authorHint: authorHint)
@@ -1310,18 +1349,19 @@ public final class AppDatabase: Sendable {
                 """, arguments: Self.args([orderID])) != nil
             guard orderExists else { throw WriteError.messageHasNoOrder }
             try db.execute(sql: """
-                INSERT INTO "orderAttachments"
+                INSERT OR IGNORE INTO "orderAttachments"
                   ("id", "orderID", "kind", "caption", "byteSize",
-                   "createdAt", "authorHint")
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                   "createdAt", "authorHint", "dataHash", "authorRef",
+                   "signingKeyID", "signature")
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
                 """, arguments: Self.args([
                     attachment.id, attachment.orderID, attachment.kind,
                     attachment.caption, attachment.byteSize,
                     attachment.createdAt.timeIntervalSince1970,
-                    attachment.authorHint,
+                    attachment.authorHint, attachment.dataHash, attachment.authorRef,
                 ]))
             try db.execute(sql: """
-                INSERT INTO "attachmentBlobs" ("attachmentID", "data")
+                INSERT OR IGNORE INTO "attachmentBlobs" ("attachmentID", "data")
                 VALUES (?, ?)
                 """, arguments: Self.args([attachment.id, data]))
             try Self.insertMessage(message, into: db)
@@ -1355,14 +1395,16 @@ public final class AppDatabase: Sendable {
 
     private static func insertMessage(_ message: OrderMessage, into db: Database) throws {
         try db.execute(sql: """
-            INSERT INTO "orderMessages"
+            INSERT OR IGNORE INTO "orderMessages"
               ("id", "orderID", "sentAt", "kind", "text",
-               "attachmentRef", "authorHint")
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+               "attachmentRef", "authorHint", "authorRef",
+               "signingKeyID", "signature")
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
             """, arguments: Self.args([
                 message.id, message.orderID,
                 message.sentAt.timeIntervalSince1970, message.kind,
                 message.text, message.attachmentRef, message.authorHint,
+                message.authorRef,
             ]))
     }
 
@@ -1374,7 +1416,52 @@ public final class AppDatabase: Sendable {
             kind: row["kind"],
             text: row["text"],
             attachmentRef: row["attachmentRef"],
-            authorHint: row["authorHint"])
+            authorHint: row["authorHint"],
+            authorRef: row["authorRef"])
+    }
+
+    /// `hex(SHA-256(data))` — the attachment row's binding to its asset (YD-42).
+    public static func dataHash(of data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    // MARK: - Local identity (device tier)
+
+    /// Records the device's own party under an authority — `cloudkit:<container>`
+    /// today — once the authority has named it. An explicit upsert: a re-fetch
+    /// that learns the same subject refreshes the stamp, a changed subject (a
+    /// new iCloud account on this device) replaces the row.
+    public func noteLocalIdentity(authority: String, subject: String, partyRef: UUID) throws {
+        try queue.write { db in
+            try db.execute(sql: """
+                INSERT INTO "localIdentity"
+                  ("authority", "subject", "partyRef", "fetchedAt")
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT("authority") DO UPDATE SET
+                  "subject" = excluded."subject",
+                  "partyRef" = excluded."partyRef",
+                  "fetchedAt" = excluded."fetchedAt"
+                """, arguments: Self.args([
+                    authority, subject, partyRef, Date.now.timeIntervalSince1970,
+                ]))
+        }
+    }
+
+    /// The device's party under an authority, if it has learned one. Absent
+    /// reads nil: until the authority answers, writers stamp `authorRef` NULL
+    /// and the authority's own stamp fills the gap for readers.
+    public func localIdentity(authority: String) throws -> LocalIdentity? {
+        try queue.read { db in
+            try Row.fetchOne(db, sql: """
+                SELECT "subject", "partyRef", "fetchedAt" FROM "localIdentity"
+                WHERE "authority" = ?
+                """, arguments: Self.args([authority])).map { row in
+                LocalIdentity(
+                    authority: authority, subject: row["subject"],
+                    partyRef: row["partyRef"],
+                    fetchedAt: Date(timeIntervalSince1970: row["fetchedAt"]))
+            }
+        }
     }
 
     // MARK: - Sync state (device tier)
