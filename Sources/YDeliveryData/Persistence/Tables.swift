@@ -7,6 +7,13 @@ import SQLiteData
 // contract's own. `SyncEngine` reads foreign keys from the DDL's `REFERENCES` clauses
 // (law 3), so `*Ref` columns are typed plain `UUID?`/`TEXT?` — never `SomeTable.ID` —
 // which is what makes "not a foreign key" visible in code.
+//
+// Schema epoch 2 (doc:Schema → "Epoch 2"): the shared tier is reorganised the way it
+// should be rather than the way it happened — `orderEvents` is the feed every writer
+// appends to, every signed table carries `authorRef`/`signingKeyID`/`signature`, and
+// `participantKeys`, `memberships` and `orderRatings` exist before the first synced
+// row. The signing columns are written NULL by this version's writers; the trust
+// layer fills them (doc:Collaboration → "Sign facts, derive state").
 
 // MARK: - Shared tier (tables:) — the share hierarchy rooted at an order
 
@@ -25,7 +32,9 @@ struct OrderRow: Identifiable {
     var lastActivityAt: Date = .init(timeIntervalSince1970: 0)
 }
 
-/// The provider mirror, 1:1 — PK is the FK. Owner-sync writes only.
+/// The provider mirror, 1:1 — PK is the FK. Owner-sync writes only. An unsigned
+/// *projection*: merged per field by the engine, checked against the signed events
+/// at read (doc:Schema → "Derived integrity").
 @Table("orderProviderStates")
 struct OrderProviderStateRow {
     @Column(primaryKey: true)
@@ -69,7 +78,8 @@ struct OrderOptionsRow {
     var comment = ""
 }
 
-/// One stop per row, in travel order.
+/// One stop per row, in travel order. A projection like the mirror: its sender
+/// columns are checked against the signed route digest at read.
 @Table("routeStops")
 struct RouteStopRow: Identifiable {
     let id: UUID
@@ -116,10 +126,6 @@ struct OrderItemRow: Identifiable {
     var dropoffStopRef: UUID?
 }
 
-/// The owner-written provider history feed. `id` is derived — `UUIDv5(orderID ‖
-/// providerEventID)` for journal events, `(orderID, providerStatus, source)` for
-/// sightings — because `SyncEngine` rejects secondary UNIQUE indexes on synchronized
-/// tables at init (spike-verified).
 /// A sender-owned field value on the order — shared tier: collaborators read the
 /// same «Заказ 4417». `fieldRef` is a value → `CustomFieldDefinitionRow.id`, not
 /// an FK: the schema is private-tier, and a value outlives its definition on the
@@ -137,21 +143,34 @@ struct OrderCustomFieldRow: Identifiable {
     var carrier: String?
 }
 
-@Table("providerEvents")
-struct ProviderEventRow: Identifiable {
+/// The history feed every writer appends to — `providerEvents` before the epoch.
+/// Append-only and signed: `id` is derived (`orderID ‖ providerEventID` for journal
+/// rows, `orderID ‖ providerRevision ‖ providerStatus ‖ routeDigest` for sightings,
+/// the writer's key joining once signing lands) because `SyncEngine` rejects
+/// secondary UNIQUE indexes on synchronized tables at init (spike-verified).
+/// `legRef` is a value → `legs.ref`, the logical leg; NULL is the order's only leg.
+@Table("orderEvents")
+struct OrderEventRow: Identifiable {
     let id: UUID
     var orderID: OrderRow.ID
+    var legRef: UUID?
     var providerEventID: Int64?
+    var providerRevision: Int64?
     @Column(as: Date.UnixEpochSecondsRepresentation.self)
     var at: Date = .init(timeIntervalSince1970: 0)
     var kind = ""
     var providerStatus: String?
     var detail: String?
     var source = ""
+    var routeDigest: String?
+    var authorRef: UUID?
+    var signingKeyID: String?
+    var signature: String?
 }
 
-/// The chat — the only participant-writable stream. `attachmentRef` is a value →
+/// The chat — a participant-writable stream, signed. `attachmentRef` is a value →
 /// `OrderAttachmentRow.id`, same-order rule enforced at the write boundary.
+/// `authorHint` is a display cache the writer asserts; `authorRef` is the party.
 @Table("orderMessages")
 struct OrderMessageRow: Identifiable {
     let id: UUID
@@ -162,10 +181,14 @@ struct OrderMessageRow: Identifiable {
     var text: String?
     var attachmentRef: UUID?
     var authorHint: String?
+    var authorRef: UUID?
+    var signingKeyID: String?
+    var signature: String?
 }
 
 /// Attachment metadata; the payload lives one child down so list queries never drag
-/// image data.
+/// image data. `dataHash` — `hex(SHA-256(data))` — binds the asset to the signed
+/// row: a blob swapped under the same id fails the attachment's verdict (YD-42).
 @Table("orderAttachments")
 struct OrderAttachmentRow: Identifiable {
     let id: UUID
@@ -176,6 +199,10 @@ struct OrderAttachmentRow: Identifiable {
     @Column(as: Date.UnixEpochSecondsRepresentation.self)
     var createdAt: Date = .init(timeIntervalSince1970: 0)
     var authorHint: String?
+    var dataHash: String?
+    var authorRef: UUID?
+    var signingKeyID: String?
+    var signature: String?
 }
 
 @Table("attachmentBlobs")
@@ -183,6 +210,67 @@ struct AttachmentBlobRow {
     @Column(primaryKey: true)
     var attachmentID: OrderAttachmentRow.ID
     var data = Data()
+}
+
+/// A device's signing key, published into every order it writes into — one row per
+/// (order, key, binding), self-signed over every column. `partyRef` is the writer's
+/// claim; the binding authority's stamp (CloudKit's creator today, a server
+/// attestation later) is what readers trust (doc:Collaboration → "Keys").
+@Table("participantKeys")
+struct ParticipantKeyRow: Identifiable {
+    let id: UUID
+    var orderID: OrderRow.ID
+    var partyRef: UUID?
+    var keyID = ""
+    var publicKey = ""
+    /// `cloudkit` or `server` — which authority binds this key to its party.
+    var bindingKind = ""
+    var bindingProof: String?
+    var bindingKeyID: String?
+    @Column(as: Date?.UnixEpochSecondsRepresentation.self)
+    var boundAt: Date?
+    @Column(as: Date.UnixEpochSecondsRepresentation.self)
+    var addedAt: Date = .init(timeIntervalSince1970: 0)
+    var signature: String?
+}
+
+/// The share's mirror and a future host's source — who is in an order and as what.
+/// Owner-written, signed, append-only: a mirrored `participant` row keeps a derived
+/// id, a role assignment holds a caller-held one, and the effective role is selected
+/// at read (doc:Schema → "`memberships`"). `role` is `participant`, `receiver`,
+/// `dispatcher`, `courier` or `removed`.
+@Table("memberships")
+struct MembershipRow: Identifiable {
+    let id: UUID
+    var orderID: OrderRow.ID
+    var partyRef = UUID()
+    var role = ""
+    @Column(as: Date.UnixEpochSecondsRepresentation.self)
+    var addedAt: Date = .init(timeIntervalSince1970: 0)
+    var authorRef: UUID?
+    var signingKeyID: String?
+    var signature: String?
+}
+
+/// A rating is a fact the chat renders, not a message kind (doc:Vision → "Players,
+/// trust and reputation"). Caller-held id; `subjectKind` names what `subjectRef`
+/// points at — a leg, a party, a stop, a provider account — and the effective
+/// rating per (author, subject) is the latest row at read.
+@Table("orderRatings")
+struct OrderRatingRow: Identifiable {
+    let id: UUID
+    var orderID: OrderRow.ID
+    var legRef: UUID?
+    var authorRef: UUID?
+    var subjectKind = ""
+    var subjectRef = ""
+    var subjectLabel: String?
+    var score = 0
+    var comment: String?
+    @Column(as: Date.UnixEpochSecondsRepresentation.self)
+    var at: Date = .init(timeIntervalSince1970: 0)
+    var signingKeyID: String?
+    var signature: String?
 }
 
 // MARK: - Private tier (privateTables:) — synced to the owner, never shared
@@ -292,6 +380,19 @@ struct ParcelTemplateItemRow: Identifiable {
 // MARK: - Device tier — never registered with SyncEngine, never leaves this device.
 // The no-secondary-UNIQUE rule governs synchronized tables only, so
 // `pendingDiscoveries` may dedupe by UNIQUE(providerAccountRef, claimID).
+
+/// The device's own party, per authority — `cloudkit:<container>` today,
+/// `server:<host>` later — so the writers can stamp `authorRef` and the identity
+/// authority can resolve `__defaultOwner__` to a party (doc:Schema → "`partyRef`").
+@Table("localIdentity")
+struct LocalIdentityRow {
+    @Column(primaryKey: true)
+    var authority: String
+    var subject = ""
+    var partyRef = UUID()
+    @Column(as: Date.UnixEpochSecondsRepresentation.self)
+    var fetchedAt: Date = .init(timeIntervalSince1970: 0)
+}
 
 /// Journal position per provider account — per-device by correctness (two devices
 /// sharing a cursor would consume each other's events).

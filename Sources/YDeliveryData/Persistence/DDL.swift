@@ -6,9 +6,18 @@ extension AppDatabase {
     /// from `PRAGMA foreign_key_list`: `*Ref` columns carry no `REFERENCES` clause,
     /// which is the one-FK share arithmetic made visible. Dates are REAL epoch
     /// seconds, booleans INTEGER — STRICT tables make that a checked fact.
+    ///
+    /// Schema epoch 2 (doc:Schema → "Primary keys"): no shared-tier primary key
+    /// carries `ON CONFLICT REPLACE`. A colliding plain `INSERT` used to rewrite the
+    /// existing row silently — invisible to sync (REPLACE fires no delete trigger and
+    /// never bumps `userModificationTime`, YD-34) and, under signing, a way to replace
+    /// a signed row wholesale. Every writer states its own policy in the statement:
+    /// `INSERT OR IGNORE` for facts, an explicit upsert for projections. The private
+    /// and device tiers keep the pre-epoch spelling — no writer there relies on the
+    /// clause either (every one upserts explicitly or ignores), so it is inert.
     static let ddl = """
         CREATE TABLE IF NOT EXISTS "\(OrderRow.tableName)" (
-          "id" TEXT PRIMARY KEY NOT NULL ON CONFLICT REPLACE DEFAULT (uuid()),
+          "id" TEXT PRIMARY KEY NOT NULL,
           "createdAt" REAL NOT NULL,
           "providerAccountRef" TEXT,
           "provider" TEXT NOT NULL,
@@ -32,7 +41,7 @@ extension AppDatabase {
           "due" REAL, "comment" TEXT NOT NULL
         ) STRICT;
         CREATE TABLE IF NOT EXISTS "\(RouteStopRow.tableName)" (
-          "id" TEXT PRIMARY KEY NOT NULL ON CONFLICT REPLACE DEFAULT (uuid()),
+          "id" TEXT PRIMARY KEY NOT NULL,
           "orderID" TEXT NOT NULL
             REFERENCES "\(OrderRow.tableName)"("id") ON DELETE CASCADE,
           "position" INTEGER NOT NULL, "role" TEXT NOT NULL,
@@ -45,7 +54,7 @@ extension AppDatabase {
           "visitStatus" TEXT, "visitedAt" REAL, "expectedVisitAt" REAL
         ) STRICT;
         CREATE TABLE IF NOT EXISTS "\(OrderItemRow.tableName)" (
-          "id" TEXT PRIMARY KEY NOT NULL ON CONFLICT REPLACE DEFAULT (uuid()),
+          "id" TEXT PRIMARY KEY NOT NULL,
           "orderID" TEXT NOT NULL
             REFERENCES "\(OrderRow.tableName)"("id") ON DELETE CASCADE,
           "name" TEXT NOT NULL, "quantity" INTEGER NOT NULL,
@@ -54,38 +63,74 @@ extension AppDatabase {
           "pickupStopRef" TEXT, "dropoffStopRef" TEXT
         ) STRICT;
         CREATE TABLE IF NOT EXISTS "\(OrderCustomFieldRow.tableName)" (
-          "id" TEXT PRIMARY KEY NOT NULL ON CONFLICT REPLACE DEFAULT (uuid()),
+          "id" TEXT PRIMARY KEY NOT NULL,
           "orderID" TEXT NOT NULL
             REFERENCES "\(OrderRow.tableName)"("id") ON DELETE CASCADE,
           "fieldRef" TEXT NOT NULL, "name" TEXT NOT NULL, "value" TEXT NOT NULL,
           "carrier" TEXT
         ) STRICT;
-        CREATE TABLE IF NOT EXISTS "\(ProviderEventRow.tableName)" (
+        CREATE TABLE IF NOT EXISTS "\(OrderEventRow.tableName)" (
           "id" TEXT PRIMARY KEY NOT NULL,
           "orderID" TEXT NOT NULL
             REFERENCES "\(OrderRow.tableName)"("id") ON DELETE CASCADE,
-          "providerEventID" INTEGER, "at" REAL NOT NULL,
+          "legRef" TEXT,
+          "providerEventID" INTEGER, "providerRevision" INTEGER,
+          "at" REAL NOT NULL,
           "kind" TEXT NOT NULL, "providerStatus" TEXT,
-          "detail" TEXT, "source" TEXT NOT NULL
+          "detail" TEXT, "source" TEXT NOT NULL,
+          "routeDigest" TEXT,
+          "authorRef" TEXT, "signingKeyID" TEXT, "signature" TEXT
         ) STRICT;
         CREATE TABLE IF NOT EXISTS "\(OrderMessageRow.tableName)" (
-          "id" TEXT PRIMARY KEY NOT NULL ON CONFLICT REPLACE DEFAULT (uuid()),
+          "id" TEXT PRIMARY KEY NOT NULL,
           "orderID" TEXT NOT NULL
             REFERENCES "\(OrderRow.tableName)"("id") ON DELETE CASCADE,
           "sentAt" REAL NOT NULL, "kind" TEXT NOT NULL,
-          "text" TEXT, "attachmentRef" TEXT, "authorHint" TEXT
+          "text" TEXT, "attachmentRef" TEXT, "authorHint" TEXT,
+          "authorRef" TEXT, "signingKeyID" TEXT, "signature" TEXT
         ) STRICT;
         CREATE TABLE IF NOT EXISTS "\(OrderAttachmentRow.tableName)" (
-          "id" TEXT PRIMARY KEY NOT NULL ON CONFLICT REPLACE DEFAULT (uuid()),
+          "id" TEXT PRIMARY KEY NOT NULL,
           "orderID" TEXT NOT NULL
             REFERENCES "\(OrderRow.tableName)"("id") ON DELETE CASCADE,
           "kind" TEXT NOT NULL, "caption" TEXT, "byteSize" INTEGER,
-          "createdAt" REAL NOT NULL, "authorHint" TEXT
+          "createdAt" REAL NOT NULL, "authorHint" TEXT,
+          "dataHash" TEXT,
+          "authorRef" TEXT, "signingKeyID" TEXT, "signature" TEXT
         ) STRICT;
         CREATE TABLE IF NOT EXISTS "\(AttachmentBlobRow.tableName)" (
           "attachmentID" TEXT PRIMARY KEY NOT NULL
             REFERENCES "\(OrderAttachmentRow.tableName)"("id") ON DELETE CASCADE,
           "data" BLOB NOT NULL
+        ) STRICT;
+        CREATE TABLE IF NOT EXISTS "\(ParticipantKeyRow.tableName)" (
+          "id" TEXT PRIMARY KEY NOT NULL,
+          "orderID" TEXT NOT NULL
+            REFERENCES "\(OrderRow.tableName)"("id") ON DELETE CASCADE,
+          "partyRef" TEXT,
+          "keyID" TEXT NOT NULL, "publicKey" TEXT NOT NULL,
+          "bindingKind" TEXT NOT NULL, "bindingProof" TEXT, "bindingKeyID" TEXT,
+          "boundAt" REAL, "addedAt" REAL NOT NULL,
+          "signature" TEXT
+        ) STRICT;
+        CREATE TABLE IF NOT EXISTS "\(MembershipRow.tableName)" (
+          "id" TEXT PRIMARY KEY NOT NULL,
+          "orderID" TEXT NOT NULL
+            REFERENCES "\(OrderRow.tableName)"("id") ON DELETE CASCADE,
+          "partyRef" TEXT NOT NULL, "role" TEXT NOT NULL,
+          "addedAt" REAL NOT NULL,
+          "authorRef" TEXT, "signingKeyID" TEXT, "signature" TEXT
+        ) STRICT;
+        CREATE TABLE IF NOT EXISTS "\(OrderRatingRow.tableName)" (
+          "id" TEXT PRIMARY KEY NOT NULL,
+          "orderID" TEXT NOT NULL
+            REFERENCES "\(OrderRow.tableName)"("id") ON DELETE CASCADE,
+          "legRef" TEXT, "authorRef" TEXT,
+          "subjectKind" TEXT NOT NULL, "subjectRef" TEXT NOT NULL,
+          "subjectLabel" TEXT,
+          "score" INTEGER NOT NULL, "comment" TEXT,
+          "at" REAL NOT NULL,
+          "signingKeyID" TEXT, "signature" TEXT
         ) STRICT;
         CREATE TABLE IF NOT EXISTS "\(ProviderAccountRow.tableName)" (
           "key" TEXT PRIMARY KEY NOT NULL,
@@ -128,6 +173,11 @@ extension AppDatabase {
           "name" TEXT NOT NULL, "quantity" INTEGER NOT NULL,
           "weightKg" REAL, "cost" TEXT, "currency" TEXT NOT NULL,
           "sizeLengthCm" REAL, "sizeWidthCm" REAL, "sizeHeightCm" REAL
+        ) STRICT;
+        CREATE TABLE IF NOT EXISTS "\(LocalIdentityRow.tableName)" (
+          "authority" TEXT PRIMARY KEY NOT NULL,
+          "subject" TEXT NOT NULL, "partyRef" TEXT NOT NULL,
+          "fetchedAt" REAL NOT NULL
         ) STRICT;
         CREATE TABLE IF NOT EXISTS "\(SyncStateRow.tableName)" (
           "providerAccountRef" TEXT PRIMARY KEY NOT NULL,
@@ -181,65 +231,17 @@ extension AppDatabase {
         ) STRICT;
         """
 
-    /// Columns added after the schema's birth — `CREATE TABLE IF NOT EXISTS`
-    /// creates today's shape but never alters yesterday's table, so each late
-    /// column gets an idempotent `ADD COLUMN` checked against `table_info`
-    /// (SQLite can't add a column to a STRICT table conditionally; the pragma
-    /// check is the guard). (table, column, type, backfill) quadruples, applied
-    /// in order — `backfill` runs once, only when the column was just added.
+    /// Columns added after a schema's birth — `CREATE TABLE IF NOT EXISTS` creates
+    /// today's shape but never alters yesterday's table, so a late column gets an
+    /// idempotent `ADD COLUMN` checked against `table_info` (SQLite can't add a
+    /// column to a STRICT table conditionally; the pragma check is the guard).
+    /// (table, column, type, backfill) quadruples, applied in order — `backfill`
+    /// runs once, only when the column was just added.
+    ///
+    /// Empty at the epoch: `ydelivery-2.sqlite` is born with the whole shape above,
+    /// and a store from before the epoch is *imported* (``EpochImport``), never
+    /// altered in place. The mechanism stays for the columns that will arrive after
+    /// this file's birth.
     static let columnMigrations: [(table: String, column: String, type: String,
-                                  backfill: String?)] = [
-        (OrderProviderStateRow.tableName, "courierName", "TEXT", nil),
-        (OrderProviderStateRow.tableName, "courierVehicle", "TEXT", nil),
-        (OrderProviderStateRow.tableName, "etaMinutes", "INTEGER", nil),
-        (OrderCustomFieldRow.tableName, "carrier", "TEXT", """
-            UPDATE "orderCustomFields" SET "carrier" = (
-              SELECT "carrier" FROM "customFieldDefinitions"
-              WHERE "customFieldDefinitions"."id" = "orderCustomFields"."fieldRef")
-            """),
-        (RouteStopRow.tableName, "visitStatus", "TEXT", nil),
-        (RouteStopRow.tableName, "visitedAt", "REAL", nil),
-        (RouteStopRow.tableName, "expectedVisitAt", "REAL", nil),
-        (PendingAcceptanceRow.tableName, "attempt", "INTEGER NOT NULL DEFAULT 1", nil),
-        (OrderPrivateStateRow.tableName, "archivedAt", "REAL", nil),
-        // YD-16 — the draft tier grows real columns. NOT NULL additions carry
-        // `DEFAULT` only to satisfy ALTER's grammar; the tables were skeletal and
-        // never written, so no row can ever read the defaults.
-        (OrderDraftRow.tableName, "proCourier", "INTEGER NOT NULL DEFAULT 0", nil),
-        (OrderDraftRow.tableName, "toDoor", "INTEGER NOT NULL DEFAULT 1", nil),
-        (OrderDraftRow.tableName, "thermobag", "INTEGER NOT NULL DEFAULT 0", nil),
-        (OrderDraftRow.tableName, "loaders", "INTEGER NOT NULL DEFAULT 0", nil),
-        (OrderDraftRow.tableName, "due", "REAL", nil),
-        (OrderDraftRow.tableName, "comment", "TEXT NOT NULL DEFAULT ''", nil),
-        (OrderDraftRow.tableName, "chosenTariff", "TEXT", nil),
-        (DraftStopRow.tableName, "latitude", "REAL", nil),
-        (DraftStopRow.tableName, "longitude", "REAL", nil),
-        (DraftStopRow.tableName, "address", "TEXT", nil),
-        (DraftStopRow.tableName, "entrance", "TEXT", nil),
-        (DraftStopRow.tableName, "floor", "TEXT", nil),
-        (DraftStopRow.tableName, "apartment", "TEXT", nil),
-        (DraftStopRow.tableName, "intercom", "TEXT", nil),
-        (DraftStopRow.tableName, "contactName", "TEXT", nil),
-        (DraftStopRow.tableName, "contactGivenName", "TEXT", nil),
-        (DraftStopRow.tableName, "contactFamilyName", "TEXT", nil),
-        (DraftStopRow.tableName, "contactPhone", "TEXT", nil),
-        (DraftStopRow.tableName, "contactPhoneExtension", "TEXT", nil),
-        (DraftItemRow.tableName, "quantity", "INTEGER NOT NULL DEFAULT 1", nil),
-        (DraftItemRow.tableName, "weightKg", "REAL", nil),
-        (DraftItemRow.tableName, "cost", "TEXT", nil),
-        (DraftItemRow.tableName, "currency", "TEXT NOT NULL DEFAULT ''", nil),
-        (DraftItemRow.tableName, "sizeLengthCm", "REAL", nil),
-        (DraftItemRow.tableName, "sizeWidthCm", "REAL", nil),
-        (DraftItemRow.tableName, "sizeHeightCm", "REAL", nil),
-        (DraftItemRow.tableName, "pickupStopRef", "TEXT", nil),
-        (DraftItemRow.tableName, "dropoffStopRef", "TEXT", nil),
-        // YD-10 — the wire's `building` (строение/корпус) lands on every
-        // point-bearing table.
-        (RouteStopRow.tableName, "building", "TEXT", nil),
-        (SavedPlaceRow.tableName, "building", "TEXT", nil),
-        (DraftStopRow.tableName, "building", "TEXT", nil),
-        // The sender's library — the pin flag on remembered doors. `DEFAULT 0`
-        // exists only to satisfy ALTER's grammar; every writer states it.
-        (SavedPlaceRow.tableName, "pinned", "INTEGER NOT NULL DEFAULT 0", nil),
-    ]
+                                  backfill: String?)] = []
 }

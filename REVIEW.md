@@ -17,9 +17,21 @@ the diff-level cues and the noise filters.
 - Flag a public API removal or rename that is not paired with a version-note in the PR
   description — consumers pin tags (`minorVersion` while 0.x), so source breaks are
   minor bumps, stated, never slipped.
-- Flag an import of anything beyond Foundation / SwiftUI / SFSafeSymbols. A new
-  dependency here taxes every consumer and needs the README's membership argument made
-  explicitly.
+- Flag an import of anything beyond Foundation / SwiftUI / SFSafeSymbols — and, in
+  `YDeliveryData`, CryptoKit for the attachment hash. A new dependency here taxes every
+  consumer and needs the README's membership argument made explicitly.
+- Flag `ON CONFLICT REPLACE` on any shared-tier primary key, and a bare `INSERT` on a
+  fact table (`orderEvents`, `orderMessages`, `orderAttachments`, `participantKeys`,
+  `memberships`, `orderRatings`) that does not state its policy — `INSERT OR IGNORE`
+  for a fact, an explicit upsert for a projection (the app's `Schema` → "Primary
+  keys"). A column's REPLACE clause rewrites a row invisibly to sync and, once rows
+  are signed, replaces a signed row wholesale.
+- Flag a write that *updates* a fact table's row, or re-derives a fact's id without
+  its revision and route digest: facts are append-only and their identity is the
+  fact's (`Schema` → "Identity on signed tables").
+- Flag a change to `EpochImport` that deletes, overwrites or rewrites the pre-epoch
+  store: it is copied read-only and marked aside, never destroyed; a copy failure
+  leaves it in place for the next open.
 
 ## Conventions
 

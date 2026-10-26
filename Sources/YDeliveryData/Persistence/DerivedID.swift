@@ -10,6 +10,12 @@ extension UUID {
     /// second write merges by primary key instead of duplicating — no secondary
     /// UNIQUE constraint, which `SyncEngine` rejects on synchronized tables anyway.
     public static func derived(namespace: UUID, _ components: String...) -> UUID {
+        derived(namespace: namespace, components)
+    }
+
+    /// The array form — for derivations whose component count is decided at
+    /// runtime (an event's optional revision, digest and writer key).
+    public static func derived(namespace: UUID, _ components: [String]) -> UUID {
         var hasher = Insecure.SHA1()
         hasher.update(data: withUnsafeBytes(of: namespace.uuid) { Data($0) })
         hasher.update(data: Data(components.joined(separator: "|").utf8))
@@ -44,5 +50,19 @@ extension UUID {
         /// An item copied between templates: `templateID ‖ copiedItemID` — a
         /// re-save of the same stale model re-derives the same row id.
         public static let templateItemCopy = UUID(uuidString: "E4F7B2C3-6D8E-4F9A-A1B2-2D3E4F5A6B7C")!
+        /// A party — the opaque person reference every row uses: `authority ‖
+        /// subject` (`"cloudkit" ‖ userRecordName` in CloudKit mode), derived
+        /// alike on every device with no server in between (doc:Schema →
+        /// "`partyRef`").
+        public static let party = UUID(uuidString: "F5A8C3D4-7E9F-4A0B-B2C3-3E4F5A6B7C8D")!
+        /// A device key's publication into an order: `orderID ‖ keyID ‖
+        /// bindingKind` — one binding statement per row.
+        public static let participantKey = UUID(uuidString: "06B9D4E5-8F0A-4B1C-A3D4-4F5A6B7C8D9E")!
+        /// A share-mirrored membership: `orderID ‖ partyRef ‖ keyID`; a role
+        /// assignment holds a caller-held id instead (doc:Schema → "Stage 1").
+        public static let membership = UUID(uuidString: "17CAE5F6-9A1B-4C2D-B4E5-5A6B7C8D9EAF")!
+        /// A logical leg: `orderID ‖ fromStopRef ‖ toStopRef` — the `ref` every
+        /// `legRef` names (doc:Schema → "Stage 2").
+        public static let leg = UUID(uuidString: "28DBF607-AB2C-4D3E-85F6-6B7C8D9EAFB0")!
     }
 }

@@ -21,9 +21,10 @@ needs, which cannot import the app.*
   updates the activity, the widget extension renders it, and two copies would be
   two activities. That is the package's one ActivityKit dependency, and it is why
   every consumer links the framework.
-- **Persistence substrate:** `AppDatabase` — one `ydelivery.sqlite` in the App Group
-  (SQLiteData + GRDB), the contract's three sync tiers, legacy-JSON migration, and the
-  lazy `SyncEngine` an extension target shares with the app. Both identifiers are the
+- **Persistence substrate:** `AppDatabase` — one `ydelivery-2.sqlite` in the App Group
+  (SQLiteData + GRDB), the contract's three sync tiers, the epoch import of a
+  pre-epoch `ydelivery.sqlite` beside it, legacy-JSON migration, and the lazy
+  `SyncEngine` an extension target shares with the app. Both identifiers are the
   consuming app's to name (`inAppGroup(id:providerAccountRef:containerIdentifier:)`):
   the group, the provider account, and the CloudKit container belong to the host.
   The private tier holds the owner's view — notes, pins, and `archivedAt`, the
@@ -44,6 +45,20 @@ while `0.x`, per the house rule in the consuming apps.
 Why the components are shaped this way — the pin taxonomy, the semantic-color rules,
 the motion table — is recorded in the consuming app's DocC catalogue
 (`YDelivery/Documentation.docc/`), deliberately not re-derived here.
+
+Schema epoch 2 (the app's `Schema` → "Epoch 2", 0.5.0): the store is reorganised the
+way it should be rather than the way it happened — a new file (`ydelivery-2.sqlite`,
+meant for a new CloudKit container the consumer names), no `ON CONFLICT REPLACE` on
+any shared primary key, the history feed as `orderEvents` (every writer's, with the
+columns the trust layer signs: `legRef`, `providerRevision`, `routeDigest`,
+`authorRef`, `signingKeyID`, `signature`), the same signing triple on messages and
+attachments (plus `dataHash`), and three new shared tables — `participantKeys`,
+`memberships`, `orderRatings` — that exist before the first synced row. The signing
+columns are written NULL by this version's writers; the trust layer fills them. A
+pre-epoch store found beside the new file is imported once, row for row, on the
+first open, then marked `*.imported-<t>-<id>` in place with its journals and its
+hidden sqlite-data metadatabase. A copy that fails keeps the store unavailable for that
+launch rather than open and empty; the old file waits for the next open.
 
 One consumer-facing honesty note: the substrate never destroys bytes. A malformed
 legacy file is rescued aside as `*.corrupted-<t>-<id>.json` before the store opens;

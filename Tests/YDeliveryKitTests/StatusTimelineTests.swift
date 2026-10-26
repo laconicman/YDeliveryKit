@@ -11,8 +11,8 @@ struct StatusTimelineTests {
     private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
 
     private func event(_ status: String, at offset: TimeInterval, id: Int64? = nil,
-                       source: String = "journal") -> ProviderEvent {
-        ProviderEvent(orderID: order, providerEventID: id, at: t0 + offset,
+                       source: String = "journal") -> OrderEvent {
+        OrderEvent(orderID: order, providerEventID: id, at: t0 + offset,
                       kind: "status", providerStatus: status, source: source)
     }
 
@@ -61,7 +61,7 @@ struct StatusTimelineTests {
 
     @Test("Events without a status word are not lines")
     func skipsStatuslessEvents() {
-        let price = ProviderEvent(orderID: order, providerEventID: 9, at: t0, kind: "price",
+        let price = OrderEvent(orderID: order, providerEventID: 9, at: t0, kind: "price",
                                   detail: "1200", source: "journal")
         #expect(StatusTimeline.Entry.entries(from: [price]).isEmpty)
     }

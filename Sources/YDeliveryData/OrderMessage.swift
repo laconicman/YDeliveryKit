@@ -11,8 +11,9 @@ import Foundation
 /// is the record's `lastModifiedBy`, not a trigger.
 public struct OrderMessage: Codable, Hashable, Identifiable, Sendable {
     /// Caller-held, not derived: a retried post reuses the caller's id and the
-    /// `ON CONFLICT REPLACE` default lands the same row — an at-least-once tap
-    /// stays one message.
+    /// store's `INSERT OR IGNORE` leaves the first row standing — an
+    /// at-least-once tap stays one message (doc:Schema → "Primary keys": no
+    /// shared key carries a REPLACE clause since the epoch).
     public var id: UUID
     public var orderID: Order.ID
     public var sentAt: Date
@@ -24,10 +25,14 @@ public struct OrderMessage: Codable, Hashable, Identifiable, Sendable {
     /// attachment must name this same order, enforced at the write boundary
     /// since `PRAGMA foreign_keys` is off.
     public var attachmentRef: OrderAttachment.ID?
-    /// The display name the post carried — a cache for rendering. Real
-    /// attribution is the record's `createdBy`, which SQL can't read; the
-    /// hint is what survives an account's departure.
+    /// The display name the post carried — a cache for rendering, self-asserted
+    /// by the writer (YD-43); real posts write it `nil`. The name a reader shows
+    /// resolves from the identity authority at render; the hint is what
+    /// survives an account's departure.
     public var authorHint: String?
+    /// The writer's party — a `partyRef`, `nil` until the device knows itself or
+    /// on rows written before signing (doc:Schema → "`partyRef`").
+    public var authorRef: UUID?
 
     /// The kinds this app writes. Kept as names rather than a closed enum so
     /// a newer peer's kind decodes instead of failing — same rule as
@@ -42,7 +47,8 @@ public struct OrderMessage: Codable, Hashable, Identifiable, Sendable {
     public init(
         id: UUID = UUID(), orderID: Order.ID, sentAt: Date = Date(),
         kind: String, text: String? = nil,
-        attachmentRef: OrderAttachment.ID? = nil, authorHint: String? = nil
+        attachmentRef: OrderAttachment.ID? = nil, authorHint: String? = nil,
+        authorRef: UUID? = nil
     ) {
         self.id = id
         self.orderID = orderID
@@ -51,6 +57,7 @@ public struct OrderMessage: Codable, Hashable, Identifiable, Sendable {
         self.text = text
         self.attachmentRef = attachmentRef
         self.authorHint = authorHint
+        self.authorRef = authorRef
     }
 }
 
@@ -67,11 +74,19 @@ public struct OrderAttachment: Codable, Hashable, Identifiable, Sendable {
     public var byteSize: Int64?
     public var createdAt: Date
     public var authorHint: String?
+    /// `hex(SHA-256(data))` of the payload one child down — what binds the asset
+    /// to this row once the row is signed (YD-42); `nil` on rows written before
+    /// the column existed.
+    public var dataHash: String?
+    /// The writer's party — a `partyRef`, `nil` until the device knows itself or
+    /// on rows written before signing.
+    public var authorRef: UUID?
 
     public init(
         id: UUID = UUID(), orderID: Order.ID, kind: String = "photo",
         caption: String? = nil, byteSize: Int64? = nil,
-        createdAt: Date = Date(), authorHint: String? = nil
+        createdAt: Date = Date(), authorHint: String? = nil,
+        dataHash: String? = nil, authorRef: UUID? = nil
     ) {
         self.id = id
         self.orderID = orderID
@@ -80,5 +95,7 @@ public struct OrderAttachment: Codable, Hashable, Identifiable, Sendable {
         self.byteSize = byteSize
         self.createdAt = createdAt
         self.authorHint = authorHint
+        self.dataHash = dataHash
+        self.authorRef = authorRef
     }
 }
