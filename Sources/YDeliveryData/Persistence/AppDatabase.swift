@@ -44,14 +44,28 @@ public final class AppDatabase: Sendable {
     private let opened = OSAllocatedUnfairLock<Result<DatabaseQueue, Error>?>(initialState: nil)
     private let engineOpened = OSAllocatedUnfairLock<Result<SyncEngine, Error>?>(initialState: nil)
     private let syncFailure = OSAllocatedUnfairLock<Error?>(initialState: nil)
+    /// Custody for the device's signing key — the consumer's choice by how it builds the
+    /// store (the App Group store gets the Keychain, a throwaway directory the ephemeral
+    /// key). The cell caches only a resolved key: a custody failure leaves it `nil` and
+    /// the next write asks again (the app's Collaboration → "Keys").
+    private let keyStore: any SigningKeyStore
+    private let signatoryCell = OSAllocatedUnfairLock<Signatory?>(initialState: nil)
 
     /// Both identifiers are the consumer's to name (Kit rule 2 — nothing here may
     /// bind one app or one provider): the account key feeds `syncStates`, the
-    /// container feeds the engine.
-    public init(directory: URL, providerAccountRef: String, containerIdentifier: String) {
+    /// container feeds the engine. `keyStore` defaults to an ephemeral key because a
+    /// store at a directory is a fixture, a preview or a seed; the durable store is
+    /// ``inAppGroup(id:providerAccountRef:containerIdentifier:fileManager:)``, whose
+    /// custody is the Keychain. A consumer that keeps a durable store elsewhere
+    /// passes a custody of its own, or its signing identity changes every launch.
+    public init(
+        directory: URL, providerAccountRef: String, containerIdentifier: String,
+        keyStore: any SigningKeyStore = EphemeralKeyStore()
+    ) {
         self.directory = directory
         self.providerAccountRef = providerAccountRef
         self.containerIdentifier = containerIdentifier
+        self.keyStore = keyStore
     }
 
     /// The store rooted in the app's shared container — `nil` when it cannot be
@@ -64,7 +78,8 @@ public final class AppDatabase: Sendable {
             .containerURL(forSecurityApplicationGroupIdentifier: id)
             .map { AppDatabase(
                 directory: $0, providerAccountRef: providerAccountRef,
-                containerIdentifier: containerIdentifier) }
+                containerIdentifier: containerIdentifier,
+                keyStore: DeviceKeyStore(accessGroup: id)) }
     }
 
     /// The open queue — public so consumers can run validated reads (the sync
@@ -146,6 +161,23 @@ public final class AppDatabase: Sendable {
         LegacyMigration.run(
             in: directory, db: db, providerAccountRef: providerAccountRef, provider: provider)
         return db
+    }
+
+    // MARK: - Signing
+
+    /// The device's signing key, resolved once per process on first need. A throwing
+    /// custody leaves the cell empty — this write goes unsigned, the next one asks
+    /// again — so a transient Keychain failure never disables signing for the process
+    /// lifetime (the parked design's red finding). Resolve it *before* entering a
+    /// write transaction, never inside one: a slow Keychain must not hold the SQLite
+    /// lock across a suspension. No writer calls this yet; the signed facts will.
+    func signatory() throws -> Signatory {
+        try signatoryCell.withLock { cell in
+            if let cell { return cell }
+            let resolved = try keyStore.signatory()
+            cell = resolved
+            return resolved
+        }
     }
 
     // MARK: - CloudKit sync
@@ -645,6 +677,16 @@ public final class AppDatabase: Sendable {
             let id = UUID.derived(
                 namespace: UUID.DerivedNamespace.orderChild,
                 order.id.uuidString, "stop", "\(index)")
+            // The sender-authored columns bind through the one list the route digest
+            // hashes (`CanonicalPayload.senderAuthoredBindings`), so the digest over
+            // the model and the digest over the stored rows cannot drift.
+            let bindings: [(any DatabaseValueConvertible)?] = [id, order.id]
+                + CanonicalPayload.senderAuthoredBindings(of: point, at: index)
+                + [
+                    point.visit?.status.rawValue,
+                    point.visit?.visitedAt?.timeIntervalSince1970,
+                    point.visit?.expectedAt?.timeIntervalSince1970,
+                ]
             try db.execute(sql: """
                 \(upsert ? "INSERT INTO" : "INSERT OR IGNORE INTO") "routeStops"
                   ("id", "orderID", "position", "role",
@@ -676,24 +718,7 @@ public final class AppDatabase: Sendable {
                   "visitedAt" = excluded."visitedAt",
                   "expectedVisitAt" = excluded."expectedVisitAt"
                 """ : "")
-                """, arguments: Self.args([
-                    id, order.id, index,
-                    point.role?.rawValue ?? (index == 0 ? "pickup" : "dropoff"),
-                    point.latitude, point.longitude, point.address,
-                    point.addressParts?.building,
-                    point.addressParts?.entrance,
-                    point.addressParts?.floor,
-                    point.addressParts?.apartment,
-                    point.addressParts?.intercom,
-                    point.contactName,
-                    point.contactGivenName,
-                    point.contactFamilyName,
-                    point.contactPhone,
-                    point.contactPhoneExtension,
-                    point.visit?.status.rawValue,
-                    point.visit?.visitedAt?.timeIntervalSince1970,
-                    point.visit?.expectedAt?.timeIntervalSince1970,
-                ]))
+                """, arguments: Self.args(bindings))
         }
     }
 

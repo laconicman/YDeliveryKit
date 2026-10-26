@@ -60,6 +60,21 @@ first open, then marked `*.imported-<t>-<id>` in place with its journals and its
 hidden sqlite-data metadatabase. A copy that fails keeps the store unavailable for that
 launch rather than open and empty; the old file waits for the next open.
 
+The trust layer's primitives (0.5.1; the app's `Collaboration` → "Sign facts, derive
+state"): `Signatory`, one device key in one of two custodies — the Secure Enclave where
+there is one, a software P-256 key elsewhere — signing ECDSA P-256/SHA-256 as 64 raw bytes,
+publishing the X9.63 point, named `p256.v2.<16 hex>`; `CanonicalPayload`, the `YDX2` byte
+stream a signature covers, built from the same `DatabaseValue`s the writer binds and the
+reader reads back, with the frozen v2 column lists and the sender-authored route digest;
+`SigningKeyStore` with `EphemeralKeyStore` (the default, in memory) and the App Group
+store's Keychain custody, cached only on success; and the read side's vocabulary —
+`Verdict`, `Attested`, `Party`, `ParticipantKey`, `IdentityAuthority` — with no
+implementation yet. The Keychain item lives here and not in the app by the membership
+test: the extension targets write too (a photo posted from the share extension must sign
+with the same device key), and the key is resolved once per process, outside any write
+transaction, so a slow Keychain never holds the SQLite lock across a suspension. Nothing
+signs in this version: the writers and the verdicts land next, each as its own patch.
+
 One consumer-facing honesty note: the substrate never destroys bytes. A malformed
 legacy file is rescued aside as `*.corrupted-<t>-<id>.json` before the store opens;
 a failed open is a stored error to render, never a crash and never silent-empty.
