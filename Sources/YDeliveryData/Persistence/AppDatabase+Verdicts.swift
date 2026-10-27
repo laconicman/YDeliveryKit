@@ -278,6 +278,62 @@ extension AppDatabase {
             authorHint: row["authorHint"], dataHash: row["dataHash"], authorRef: row["authorRef"])
     }
 
+    // MARK: - Ratings
+
+    /// The order's ratings with a verdict each, oldest first by `at`, then the smallest
+    /// id. Every row, superseded and tampered ones included: a rating is a decision, so
+    /// nothing is deduped here (rule 1); ``effectiveRatings(orderID:authority:)``
+    /// selects the ones in force.
+    public func attestedRatings(orderID: Order.ID, authority: any IdentityAuthority) throws -> [Attested<OrderRating>] {
+        let book = try PartyBook(orderID: orderID, database: self, authority: authority)
+        let columns = CanonicalPayload.signedColumns[OrderRatingRow.tableName] ?? []
+        let rows = try queue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT * FROM "orderRatings" WHERE "orderID" = ? ORDER BY "at", "id"
+                """, arguments: Self.args([orderID]))
+        }
+        return rows.map { row in
+            let rating = Self.orderRating(row)
+            let payload = CanonicalPayload.payload(
+                table: OrderRatingRow.tableName, columns: columns,
+                values: CanonicalPayload.values(from: row, columns: columns))
+            let verdict = book.verdict(
+                table: OrderRatingRow.tableName, legRef: rating.legRef, stamp: rating.at, payload: payload,
+                signingKeyID: row["signingKeyID"], signature: row["signature"], authorRef: rating.authorRef)
+            return Attested(value: rating, verdict: verdict)
+        }
+    }
+
+    /// The order's ratings as they count: per (author, subject) the latest *verified*
+    /// or *legacy* row with the rows it superseded, and beside them every row a warned
+    /// or unplaced verdict keeps from counting (``EffectiveRatings``).
+    public func effectiveRatings(orderID: Order.ID, authority: any IdentityAuthority) throws -> EffectiveRatings {
+        EffectiveRatings(try attestedRatings(orderID: orderID, authority: authority))
+    }
+
+    /// The count and mean of one subject's counted ratings across every order in the
+    /// store — the effective rating per author per order, never a not-counted row;
+    /// `nil` when there is none. Derived at read and never persisted: this is the
+    /// sender's own experience, not a reputation (``RatingSummary``).
+    public func ratingSummary(
+        subjectKind: String, subjectRef: String, authority: any IdentityAuthority
+    ) throws -> RatingSummary? {
+        let orderIDs = try queue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT DISTINCT "orderID" FROM "orderRatings"
+                WHERE "subjectKind" = ? AND "subjectRef" = ?
+                """, arguments: Self.args([subjectKind, subjectRef])).map { $0["orderID"] as UUID }
+        }
+        let scores = try orderIDs.flatMap { orderID in
+            try effectiveRatings(orderID: orderID, authority: authority).counted
+                .map(\.current.value)
+                .filter { $0.subject.kind == subjectKind && $0.subject.ref == subjectRef }
+                .map(\.score)
+        }
+        guard !scores.isEmpty else { return nil }
+        return RatingSummary(count: scores.count, mean: Double(scores.reduce(0, +)) / Double(scores.count))
+    }
+
     // MARK: - Derived integrity
 
     /// The one total order over the verified rows (the app's Collaboration →

@@ -82,6 +82,11 @@ the diff-level cues and the noise filters.
   write into temporary directories, never a real container.
 - Shared measures come from the `Layout` tokens; flag new magic numbers where a token
   or a named constant beside the component belongs.
+- Open string vocabularies are deliberate: `OrderRating.Subject.Kind`, like
+  `OrderMessage.Kind`, `OrderEvent.Kind`, `Membership.Role` and
+  `ParticipantKey.BindingKind`, is a namespace of named constants over a stored string,
+  so a newer peer's word decodes instead of failing — do not ask for a closed enum. Flag
+  a bare literal where a named constant exists instead.
 
 ## Noise Filters
 
