@@ -22,10 +22,26 @@ public struct Membership: Codable, Hashable, Identifiable, Sendable {
         public static let receiver = "receiver"
         public static let dispatcher = "dispatcher"
         public static let courier = "courier"
+        /// Mirrored for a participant the share lists with read permission only: in,
+        /// and entitled to write nothing. A permission change is a new mirrored row,
+        /// so the change is dated and judged as of the row like a removal (review,
+        /// PR #48).
+        public static let reader = "reader"
         /// Appended when the share no longer lists the party: an append-only table
         /// with no way to say "no longer" would keep a removed participant's
         /// entitlement forever.
         public static let removed = "removed"
+    }
+
+    /// A party's standing in the share as a row records it: `removed`, `reader`, or
+    /// — for every live role the owner may assign — `participant`. The reconcile
+    /// writes a row when the share's permission and the effective row's standing
+    /// differ; the party book places a party only when the two agree.
+    static func standing(of role: String) -> String {
+        switch role {
+        case Role.removed, Role.reader: role
+        default: Role.participant
+        }
     }
 
     public init(
@@ -48,12 +64,16 @@ public struct Membership: Codable, Hashable, Identifiable, Sendable {
     /// `removed` rows the writer sees for the party: a participant who returns after
     /// a removal is a new membership, and a derived id without the count would make
     /// the return collide with the first row and vanish under `INSERT OR IGNORE`.
-    /// Two devices converge once they see the same removals.
+    /// Two devices converge once they see the same removals. `revision` numbers the
+    /// standing changes mirrored within one admission — the share made a participant
+    /// a reader, then a writer again — each its own row; 0 is the admission row, whose
+    /// id is what 0.5.2 derived (review, PR #48).
     public static func mirroredID(
-        orderID: Order.ID, partyRef: UUID, writerKeyID: String, generation: Int
+        orderID: Order.ID, partyRef: UUID, writerKeyID: String, generation: Int, revision: Int = 0
     ) -> UUID {
-        .derived(namespace: UUID.DerivedNamespace.membership,
-                 [orderID.uuidString, partyRef.uuidString, writerKeyID, String(generation)])
+        var components = [orderID.uuidString, partyRef.uuidString, writerKeyID, String(generation)]
+        if revision > 0 { components.append(String(revision)) }
+        return .derived(namespace: UUID.DerivedNamespace.membership, components)
     }
 
     /// The row in force among `rows` — the caller passes only rows that count, which

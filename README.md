@@ -97,10 +97,14 @@ row's stamp; events are deduped by fact at read. `mirrorIntegrity` and `routeInt
 check the projections against the latest verified fact under one total order, and the
 mirror itself follows that order at an equal stamp, so the two agree. A revisionless
 sighting keys on its own stamp; a signed replay of a fact already recorded unsigned adds
-no row. The share's permission gates writing — a participant it lists read-only is a
-reader — and a party it no longer lists verifies nothing until the owner's `removed` row
-dates the departure; a photo whose bytes are not here yet reads unverifiable. The
-unattested reads stay for callers that render no verdict.
+no row. The share's list is the trigger and the owner's signed rows are the dates: the
+reconcile mirrors the share's permission too — a `reader` row for a participant it lists
+read-only, a new row per change under the next revision of the admission — and the party
+book places a party only when the list and the rows agree on their standing, the
+effective row as of the stamp then naming the role; a disagreement (a departure, a
+permission change, a return the owner's device has not mirrored) places nobody until it
+is dated, and no cached share places nobody but the owner. A photo whose bytes are not
+here yet reads unverifiable. The unattested reads stay for callers that render no verdict.
 
 One consumer-facing honesty note: the substrate never destroys bytes. A malformed
 legacy file is rescued aside as `*.corrupted-<t>-<id>.json` before the store opens;

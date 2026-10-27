@@ -1236,11 +1236,20 @@ public final class AppDatabase: Sendable {
             // write custody failed to sign — is this fact: a signed replay adds no
             // second row and is no news; the row stays as it is, never re-signed
             // (review, PR #48).
-            let recordedKeyless = try event.id != keyless && Row.fetchOne(db, sql: """
+            var recorded = try event.id != keyless && Row.fetchOne(db, sql: """
                 SELECT 1 FROM "orderEvents" WHERE "id" = ?
                 """, arguments: Self.args([keyless])) != nil
+            // A revisionless observation stored before the stamp joined the key sits
+            // under its former id with this very stamp; the same status at a later
+            // stamp under that id is an earlier observation, and this one is new.
+            let former = event.formerKeylessDerivedID
+            if !recorded, let former {
+                recorded = try Row.fetchOne(db, sql: """
+                    SELECT 1 FROM "orderEvents" WHERE "id" = ? AND "at" = ?
+                    """, arguments: Self.args([former, event.at.timeIntervalSince1970])) != nil
+            }
             var inserted = false
-            if !recordedKeyless {
+            if !recorded {
                 if let signatory {
                     try Self.publishKeyIfNeeded(
                         orderID: event.orderID, signatory: signatory, partyRef: event.authorRef, in: db)
@@ -1282,14 +1291,17 @@ public final class AppDatabase: Sendable {
                 // higher revision, then the smallest id — so the mirror and
                 // `mirrorIntegrity` agree on what may be the staler word rather than
                 // disagree by arrival (review, PR #48).
+                // Only status-bearing rows compete: the mirror records nothing else, and
+                // `mirrorIntegrity` ranks the same set (round 2).
                 let stamp = event.at.timeIntervalSince1970
                 var outranked = false
                 if observedAt == stamp {
                     let peers = try Row.fetchAll(db, sql: """
-                        SELECT * FROM "orderEvents" WHERE "orderID" = ? AND "at" = ?
+                        SELECT * FROM "orderEvents"
+                        WHERE "orderID" = ? AND "at" = ? AND "providerStatus" IS NOT NULL
                         """, arguments: Self.args([event.orderID, stamp])).map(Self.orderEvent)
-                    if let winner = peers.max(by: Self.precedes), winner.id != event.id,
-                       winner.id != keyless {
+                    let own: Set<UUID?> = [event.id, keyless, former]
+                    if let winner = peers.max(by: Self.precedes), !own.contains(winner.id) {
                         outranked = true
                     }
                 }

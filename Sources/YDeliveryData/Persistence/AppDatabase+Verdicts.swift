@@ -45,19 +45,20 @@ struct PartyBook {
     }
 
     /// The party's role as of a stamp, or `nil` for a party this read cannot place.
-    /// The owner is the order's owner (this device on a private order); a member is a
-    /// party whose effective membership row as of the stamp names a role other than
-    /// `removed`, or, before the owner's device has reconciled one, a party the
-    /// authority lists as a participant; `.unknown` is a placed party with no role as
-    /// of the stamp — dated past the owner's `removed` row — and reads *notEntitled*.
-    /// Two rules from review (PR #48): the share's permission gates writing whatever a
-    /// row names, so a participant the share lists read-only is a reader; and a party
-    /// the share no longer lists cannot be placed until the owner's `removed` row dates
-    /// the departure — nothing of theirs verifies meanwhile, quietly — after which the
-    /// as-of-row rule holds again: what they wrote while a member stays verified, what
-    /// is dated after the removal reads *notEntitled*. The server does not deliver a
-    /// row written after a removal; a row dated back into the role is the writer's
-    /// claim that the server `creationDate` bound (the adoption) checks.
+    /// The owner is the order's owner (this device on a private order). For anyone
+    /// else the share's list is the trigger and the owner's signed rows are the dates
+    /// (review, PR #48): a party is placed only when the list and the rows agree on
+    /// their standing — in as a writer, in as a reader, or out — and then the
+    /// effective row as of the stamp names the role, the list standing in before the
+    /// first row; `.unknown` is a placed party with no role as of the stamp, dated past
+    /// the owner's `removed` row, and reads *notEntitled*. A disagreement — a party the
+    /// share no longer lists, a permission the share changed, a return the owner's
+    /// device has not mirrored — is a change nobody has dated yet: nothing of theirs
+    /// verifies until the owner's device writes the row, quietly, after which what they
+    /// wrote while entitled stays verified and what is dated after reads *notEntitled*.
+    /// No roster — the share not cached here — places nobody but the owner. The server
+    /// does not deliver a row written after a removal; a row dated back into a role is
+    /// the writer's claim that the server `creationDate` bound (the adoption) checks.
     func role(of party: UUID?, mine: Bool, asOf stamp: Date) -> Party.Role? {
         switch ownership {
         case .local where mine || (party != nil && party == localParty):
@@ -67,18 +68,15 @@ struct PartyBook {
         default:
             break
         }
-        guard let party else { return nil }
+        guard let party, !members.isEmpty else { return nil }
         let listed = members.first { $0.ref == party && !$0.isOwner }
-        if let listed, !listed.canWrite { return .reader }
+        let listedStanding = listed.map { $0.canWrite ? Membership.Role.participant : Membership.Role.reader }
+        let byList: Party.Role? = listedStanding.map { .member(kind: $0) }
         let rows = memberships.filter { $0.partyRef == party }
-        if listed == nil, !members.isEmpty,
-           Membership.effective(among: rows)?.role != Membership.Role.removed {
-            return nil
-        }
-        if let effective = Membership.effective(among: rows, asOf: stamp) {
-            return effective.role == Membership.Role.removed ? .unknown : .member(kind: effective.role)
-        }
-        return listed != nil ? .member(kind: Membership.Role.participant) : nil
+        guard let current = Membership.effective(among: rows) else { return byList }
+        guard Membership.standing(of: current.role) == listedStanding ?? Membership.Role.removed else { return nil }
+        guard let effective = Membership.effective(among: rows, asOf: stamp) else { return byList }
+        return effective.role == Membership.Role.removed ? .unknown : .member(kind: effective.role)
     }
 
     /// The verdict on one row of `table`, from its stored signing columns and the

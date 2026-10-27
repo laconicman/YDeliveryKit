@@ -401,7 +401,108 @@ struct SignedFactsTests {
             localParty: me, owner: me, participants: [Member(ref: reader, canWrite: false)],
             stamps: [try readerDevice.signatory().keyID: reader], myKeyID: try owner.signatory().keyID)
         let verdict = try owner.attestedMessages(orderID: order.id, authority: authority)[0].verdict
-        #expect(verdict == .notEntitled(author: Party(ref: reader, role: .reader)))
+        #expect(verdict == .notEntitled(author: Party(ref: reader, role: .member(kind: Membership.Role.reader))))
+    }
+
+    @Test("A permission the share changed is undated until the owner's device mirrors it; then each row is judged as of its stamp")
+    func permissionChangeIsDated() throws {
+        let owner = makeDatabase()
+        let order = try recordOrder(in: owner)
+        let irina = party("_irina")
+        let irinaDevice = makeDatabase(keyStore: EphemeralKeyStore())
+        let irinaKey = try irinaDevice.signatory().keyID
+        func authority(canWrite: Bool) throws -> TrustRowsTests.FakeAuthority {
+            TrustRowsTests.FakeAuthority(
+                localParty: me, owner: me, participants: [Member(ref: irina, canWrite: canWrite)],
+                stamps: [irinaKey: irina], myKeyID: try owner.signatory().keyID)
+        }
+        func post(_ text: String, at: TimeInterval) throws {
+            try irinaDevice.postMessage(OrderMessage(orderID: order.id, sentAt: Date(timeIntervalSince1970: at),
+                                                     kind: OrderMessage.Kind.text, text: text, authorRef: irina))
+        }
+        func verdicts(_ authority: TrustRowsTests.FakeAuthority) throws -> [Verdict] {
+            try owner.attestedMessages(orderID: order.id, authority: authority).map(\.verdict)
+        }
+        let writer = try authority(canWrite: true), reader = try authority(canWrite: false)
+        try owner.reconcileMemberships(orderID: order.id, authority: writer, at: Date(timeIntervalSince1970: 1_050))
+        try post("as a writer", at: 1_100)
+        #expect(try verdicts(writer)[0].isVerified)
+        // The share makes her read-only; nothing dates it yet.
+        #expect(try verdicts(reader) == [.unverifiable], "an undated downgrade places nobody")
+        try owner.reconcileMemberships(orderID: order.id, authority: reader, at: Date(timeIntervalSince1970: 1_200))
+        try post("as a reader", at: 1_300)
+        #expect(try verdicts(reader) == [
+            .verified(author: Party(ref: irina, role: .member(kind: Membership.Role.participant))),
+            .notEntitled(author: Party(ref: irina, role: .member(kind: Membership.Role.reader))),
+        ], "what she wrote as a writer stays verified; what is dated after the downgrade is hers and not entitled")
+        // Restored, undated, then dated.
+        #expect(try verdicts(writer) == [.unverifiable, .unverifiable])
+        try owner.reconcileMemberships(orderID: order.id, authority: writer, at: Date(timeIntervalSince1970: 1_400))
+        try post("a writer again", at: 1_500)
+        #expect(try verdicts(writer).map(\.isVerified) == [true, false, true])
+    }
+
+    @Test("No roster cached places nobody but the owner")
+    func noRosterPlacesNobody() throws {
+        let owner = makeDatabase()
+        let order = try recordOrder(in: owner)
+        let irina = party("_irina")
+        let irinaDevice = makeDatabase(keyStore: EphemeralKeyStore())
+        var authority = TrustRowsTests.FakeAuthority(
+            localParty: me, owner: me, participants: [Member(ref: irina, canWrite: true)],
+            stamps: [try irinaDevice.signatory().keyID: irina], myKeyID: try owner.signatory().keyID)
+        try owner.reconcileMemberships(orderID: order.id, authority: authority, at: Date(timeIntervalSince1970: 1_050))
+        try irinaDevice.postMessage(OrderMessage(orderID: order.id, kind: OrderMessage.Kind.text, text: "hi", authorRef: irina))
+        try owner.postMessage(OrderMessage(orderID: order.id, kind: OrderMessage.Kind.text, text: "hello", authorRef: me))
+        #expect(try owner.attestedMessages(orderID: order.id, authority: authority).allSatisfy(\.verdict.isVerified))
+        authority.rosterUnavailable = true
+        let verdicts = try owner.attestedMessages(orderID: order.id, authority: authority).map(\.verdict)
+        #expect(verdicts.contains(.unverifiable) && verdicts.contains(.verified(author: Party(ref: me, role: .owner))),
+                "her live row alone places nobody without the share; the owner is the owner by ownership")
+    }
+
+    @Test("A price-only row at the same stamp never blocks the status row, in either arrival order")
+    func priceEventDoesNotBlockStatus() throws {
+        let database = makeDatabase()
+        let authority = try privateAuthority(database)
+        func price(id: Int64, orderID: UUID) -> OrderEvent {
+            OrderEvent(orderID: orderID, providerEventID: id, providerRevision: 1, at: Date(timeIntervalSince1970: 1_100),
+                       kind: OrderEvent.Kind.priceChanged, detail: "850 RUB", source: OrderEvent.Source.journal)
+        }
+        let first = try recordOrder(in: database)
+        #expect(!(try database.recordEvent(price(id: 12, orderID: first.id)).statusAdvanced))
+        #expect(try database.recordEvent(journal("accepted", id: 11, at: 1_100, orderID: first.id)).statusAdvanced,
+                "a price row that outranks it by operation id never set the mirror")
+        #expect(try database.readOrders().first { $0.id == first.id }?.providerStatus == "accepted")
+        #expect(try database.mirrorIntegrity(orderID: first.id, authority: authority) == .consistent)
+        let second = try recordOrder(in: database)
+        #expect(try database.recordEvent(journal("accepted", id: 11, at: 1_100, orderID: second.id)).statusAdvanced)
+        #expect(!(try database.recordEvent(price(id: 12, orderID: second.id)).statusAdvanced))
+        #expect(try database.readOrders().first { $0.id == second.id }?.providerStatus == "accepted")
+        #expect(try database.mirrorIntegrity(orderID: second.id, authority: authority) == .consistent)
+    }
+
+    @Test("A revisionless observation stored under its former id is recognised on replay; a later one is a new row")
+    func formerRevisionlessIDIsRecognised() throws {
+        let database = makeDatabase()
+        let order = try recordOrder(in: database)
+        func revisionless(at: TimeInterval) -> OrderEvent {
+            OrderEvent(orderID: order.id, at: Date(timeIntervalSince1970: at), kind: OrderEvent.Kind.sighting,
+                       providerStatus: "accepted", source: OrderEvent.Source.card)
+        }
+        let stored = revisionless(at: 1_100)
+        let former = try #require(stored.formerKeylessDerivedID)
+        #expect(former != stored.keylessDerivedID)
+        try database.queue.write { db in
+            try db.execute(sql: """
+                INSERT INTO "orderEvents" ("id", "orderID", "at", "kind", "providerStatus", "source")
+                VALUES (?, ?, 1100, 'sighting', 'accepted', 'card')
+                """, arguments: AppDatabase.args([former, order.id]))
+        }
+        #expect(!(try database.recordEvent(stored).inserted), "the same observation under its former id")
+        #expect(try database.events(orderID: order.id).count == 1)
+        #expect(try database.recordEvent(revisionless(at: 1_300)).inserted, "a later observation is new")
+        #expect(try database.events(orderID: order.id).count == 2)
     }
 
     @Test("A member the share no longer lists verifies nothing until the departure is dated; then what they wrote as a member comes back")

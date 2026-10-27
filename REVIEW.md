@@ -46,10 +46,11 @@ the diff-level cues and the noise filters.
   written stale rather than NULL on a custody failure, and an attested read that throws
   on a bad signature or drops a row: verdicts render beside the data, never refuse it.
 - Flag a projection update that settles an equal-stamp tie by arrival rather than
-  `AppDatabase.precedes`, and a role resolution that places a party the share no
-  longer lists from membership rows alone: the mirror and `mirrorIntegrity` share one
-  total order, and an undated departure places nobody until the owner's `removed` row
-  dates it (review, PR #48).
+  `AppDatabase.precedes` over status-bearing rows, and a role resolution that places a
+  party from the share's list alone or from membership rows alone: the mirror and
+  `mirrorIntegrity` share one total order, and a party is placed only when the list
+  and the owner's rows agree on their standing — an undated departure or permission
+  change places nobody until the reconcile dates it (review, PR #48).
 - Flag `ON CONFLICT REPLACE` on any shared-tier primary key, and a bare `INSERT` on a
   fact table (`orderEvents`, `orderMessages`, `orderAttachments`, `participantKeys`,
   `memberships`, `orderRatings`) that does not state its policy — `INSERT OR IGNORE`

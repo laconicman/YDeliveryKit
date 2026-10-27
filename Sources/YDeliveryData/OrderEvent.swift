@@ -130,6 +130,17 @@ public struct OrderEvent: Codable, Hashable, Identifiable, Sendable {
             providerStatus: providerStatus ?? kind, routeDigest: routeDigest, at: at, writerKeyID: nil)
     }
 
+    /// The id this fact derived before 0.5.3 when it is a revisionless sighting — an
+    /// empty component where the revision would be, every observation of one status
+    /// keyed alike — and `nil` when the derivation is unchanged. The writer probes it
+    /// with the stamp, so an observation stored before the upgrade is recognised on
+    /// replay and a later one is a new row (review, PR #48).
+    var formerKeylessDerivedID: UUID? {
+        guard providerEventID == nil, providerRevision == nil else { return nil }
+        return .derived(namespace: UUID.DerivedNamespace.providerEvent,
+                        [orderID.uuidString, "", providerStatus ?? kind, routeDigest ?? ""])
+    }
+
     static func derivedID(
         orderID: UUID, providerEventID: Int64?, providerRevision: Int64?,
         providerStatus: String, routeDigest: String?, at: Date, writerKeyID: String?
