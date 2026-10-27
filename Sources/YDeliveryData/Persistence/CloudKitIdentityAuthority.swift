@@ -50,7 +50,13 @@ public struct CloudKitIdentityAuthority: IdentityAuthority {
     /// share's owner resolved like any record name — unresolved while the device does
     /// not know itself.
     public func owner(of orderID: Order.ID) -> Ownership {
-        let root = (try? database.rootZone(of: orderID)) ?? nil
+        let root: (ownerName: String, share: CKShare?)?
+        do {
+            root = try database.rootZone(of: orderID)
+        } catch {
+            // A read that failed answers nothing: not "mine", unresolved (review, PR #47).
+            return .unresolved
+        }
         return PartyResolution.ownership(
             zoneOwnerName: root?.ownerName, share: root?.share.map(ShareSummary.init),
             localParty: localParty)

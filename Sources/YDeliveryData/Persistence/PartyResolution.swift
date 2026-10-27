@@ -25,6 +25,8 @@ enum PartyResolution {
     /// name is theirs, share cached or not; our own zone is private without a share,
     /// and with one the share's owner resolves like any record name — the placeholder
     /// is this device, unresolved while it does not know itself (review, PR #47).
+    /// `zoneOwnerName` is `nil` only for a *successful* read that found no metadata row;
+    /// a read that failed is the caller's to answer, and it answers `.unresolved`.
     static func ownership(zoneOwnerName: String?, share: ShareSummary?, localParty: UUID?) -> Ownership {
         guard let zoneOwnerName else { return .local }
         guard zoneOwnerName == currentUserDefaultName else {
