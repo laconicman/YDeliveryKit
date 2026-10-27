@@ -44,10 +44,20 @@ public struct CloudKitIdentityAuthority: IdentityAuthority {
             stampRecordName: stamp, claimedPartyRef: key.partyRef, isMine: mine, localParty: localParty)
     }
 
+    /// The share's owner and accepted participants, with roles from the membership
+    /// rows that count: only rows signed under a key row this authority resolves to the
+    /// share's owner (or to this device before any stamp, when this device is the
+    /// owner), so a role a participant appended is never reported as the owner's
+    /// assignment. A private order lists nobody: its device is its owner.
     public func members(of orderID: Order.ID) -> [Member] {
-        let share = (try? database.share(of: orderID)) ?? nil
-        let rows = (try? database.memberships(orderID: orderID)) ?? []
-        return MemberList.merge(summary: share.map(ShareSummary.init), memberships: rows)
+        guard let share = (try? database.share(of: orderID)) ?? nil else { return [] }
+        let summary = ShareSummary(share: share)
+        let localParty = localParty
+        let ownerRef = summary.ownerRef(localParty: localParty)
+        let counting = (try? database.ownerMemberships(
+            orderID: orderID, keysTrustedBy: self, ownerRef: ownerRef,
+            isLocalOwner: ownerRef != nil && ownerRef == localParty)) ?? []
+        return MemberList.merge(summary: summary, memberships: counting, localParty: localParty)
     }
 }
 
