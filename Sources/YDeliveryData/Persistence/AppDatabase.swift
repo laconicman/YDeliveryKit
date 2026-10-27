@@ -378,7 +378,7 @@ public final class AppDatabase: Sendable {
     /// History as the list reads it: orders joined to their mirrors, stops grouped —
     /// newest first. Ordering is a read-time derivation, never a write
     /// (doc:Schema → "List ordering is derived"): `lastActivityAt` stays the
-    /// owner's provider stamp, and a participant's message or photo lifts the
+    /// owner's provider stamp, and a participant's message, photo or rating lifts the
     /// order through the `MAX`/`COALESCE` below — each child aggregate
     /// coalesced to epoch so "no such activity" never wins over a real stamp.
     public func readOrders() throws -> [Order] {
@@ -396,6 +396,8 @@ public final class AppDatabase: Sendable {
                     COALESCE((SELECT MAX("sentAt") FROM "orderMessages"
                               WHERE "orderID" = o."id"), 0),
                     COALESCE((SELECT MAX("createdAt") FROM "orderAttachments"
+                              WHERE "orderID" = o."id"), 0),
+                    COALESCE((SELECT MAX("at") FROM "orderRatings"
                               WHERE "orderID" = o."id"), 0)) DESC
                 """)
             let stops = try Row.fetchAll(db, sql: """
@@ -1560,7 +1562,8 @@ public final class AppDatabase: Sendable {
     /// id is a no-op through `INSERT OR IGNORE`.
     ///
     /// Like a message, the write bumps no `lastActivityAt` — that column is the
-    /// owner's provider-activity stamp by contract.
+    /// owner's provider-activity stamp by contract; `readOrders` derives the rating's
+    /// recency from `at` instead (review, PR #49).
     public func postRating(_ rating: OrderRating) throws {
         guard OrderRating.scores.contains(rating.score) else { throw WriteError.scoreOutOfRange }
         let signatory = try? signatory()

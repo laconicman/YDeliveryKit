@@ -125,6 +125,29 @@ struct RatingsTests {
         #expect(effective.counted.count == 1 && effective.notCounted.map(\.value.score) == [3])
     }
 
+    @Test("A fresh rating lifts its order in the list without touching the stamp")
+    func ratingLiftsOrderInReadOrder() throws {
+        let database = makeDatabase()
+        let older = try recordOrder(in: database)
+        let newer = try recordOrder(in: database)
+        try database.postMessage(OrderMessage(orderID: newer.id, sentAt: Date().addingTimeInterval(60),
+                                              kind: OrderMessage.Kind.text, text: "у ворот"))
+        #expect(try database.readOrders().first?.id == newer.id, "the newer chat leads before any rating")
+        let stamp = {
+            try database.queue.read { db in
+                try Double.fetchOne(db, sql: """
+                    SELECT "lastActivityAt" FROM "orders" WHERE "id" = ?
+                    """, arguments: AppDatabase.args([older.id]))
+            }
+        }
+        let before = try stamp()
+        try database.postRating(OrderRating(orderID: older.id, authorRef: me, subject: Self.courierRun,
+                                            score: 5, at: Date().addingTimeInterval(120)))
+        #expect(try database.readOrders().first?.id == older.id,
+                "the rating's at derived the new order (review, PR #49)")
+        #expect(try stamp() == before, "the stamp stayed put: no lastActivityAt bump")
+    }
+
     // MARK: Effective ratings
 
     @Test("Posting again for the same subject: the later row counts, the earlier is its history")
