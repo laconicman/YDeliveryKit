@@ -339,6 +339,11 @@ public final class AppDatabase: Sendable {
         /// `cancelled`, `attention` shelve; a still-moving order refuses (the
         /// app decides `attention`'s finer case off the provider word).
         case orderStillMoving
+        /// A rating naming an order that isn't a row here — like a message, it
+        /// would sync a dangling reference to every share.
+        case ratingHasNoOrder
+        /// A score outside ``OrderRating/scores``.
+        case scoreOutOfRange
         public var errorDescription: String? {
             switch self {
             case .draftHasNoProviderExistence:
@@ -353,6 +358,10 @@ public final class AppDatabase: Sendable {
                 "a photo message needs its attachment — post through postPhotoMessage"
             case .orderStillMoving:
                 "A delivery that is still moving cannot be archived."
+            case .ratingHasNoOrder:
+                "a rating needs its order — the order row does not exist here"
+            case .scoreOutOfRange:
+                "a rating's score is 1 to 5"
             }
         }
     }
@@ -369,7 +378,7 @@ public final class AppDatabase: Sendable {
     /// History as the list reads it: orders joined to their mirrors, stops grouped —
     /// newest first. Ordering is a read-time derivation, never a write
     /// (doc:Schema → "List ordering is derived"): `lastActivityAt` stays the
-    /// owner's provider stamp, and a participant's message or photo lifts the
+    /// owner's provider stamp, and a participant's message, photo or rating lifts the
     /// order through the `MAX`/`COALESCE` below — each child aggregate
     /// coalesced to epoch so "no such activity" never wins over a real stamp.
     public func readOrders() throws -> [Order] {
@@ -387,6 +396,8 @@ public final class AppDatabase: Sendable {
                     COALESCE((SELECT MAX("sentAt") FROM "orderMessages"
                               WHERE "orderID" = o."id"), 0),
                     COALESCE((SELECT MAX("createdAt") FROM "orderAttachments"
+                              WHERE "orderID" = o."id"), 0),
+                    COALESCE((SELECT MAX("at") FROM "orderRatings"
                               WHERE "orderID" = o."id"), 0)) DESC
                 """)
             let stops = try Row.fetchAll(db, sql: """
@@ -1537,6 +1548,56 @@ public final class AppDatabase: Sendable {
     /// `hex(SHA-256(data))` — the attachment row's binding to its asset (YD-42).
     public static func dataHash(of data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    // MARK: - Ratings (shared tier)
+
+    /// Posts a rating into the order — a signed fact beside the chat, never a message
+    /// (the app's Vision → "Players, trust and reputation"). The order must be a row
+    /// here and the score within ``OrderRating/scores``; the row is signed over
+    /// exactly what the statement binds, with the device's key published into the
+    /// order in the same transaction, and a custody failure writes the signature pair
+    /// NULL (rule 3). Append-only: posting again for the same subject is a new row
+    /// under a new id, and the read selects the one in force; a retry under the same
+    /// id is a no-op through `INSERT OR IGNORE`.
+    ///
+    /// Like a message, the write bumps no `lastActivityAt` — that column is the
+    /// owner's provider-activity stamp by contract; `readOrders` derives the rating's
+    /// recency from `at` instead (review, PR #49).
+    public func postRating(_ rating: OrderRating) throws {
+        guard OrderRating.scores.contains(rating.score) else { throw WriteError.scoreOutOfRange }
+        let signatory = try? signatory()
+        try queue.write { db in
+            let orderExists = try Row.fetchOne(db, sql: """
+                SELECT 1 FROM "orders" WHERE "id" = ?
+                """, arguments: Self.args([rating.orderID])) != nil
+            guard orderExists else { throw WriteError.ratingHasNoOrder }
+            if let signatory {
+                try Self.publishKeyIfNeeded(
+                    orderID: rating.orderID, signatory: signatory, partyRef: rating.authorRef, in: db)
+            }
+            try Self.insertSigned(
+                table: OrderRatingRow.tableName,
+                bindings: [
+                    rating.id, rating.orderID, rating.legRef, rating.authorRef,
+                    rating.subject.kind, rating.subject.ref, rating.subject.label,
+                    rating.score, rating.comment, rating.at.timeIntervalSince1970,
+                ],
+                signatory: signatory, into: db)
+        }
+    }
+
+    static func orderRating(_ row: Row) -> OrderRating {
+        OrderRating(
+            id: row["id"],
+            orderID: row["orderID"],
+            legRef: row["legRef"],
+            authorRef: row["authorRef"],
+            subject: OrderRating.Subject(
+                kind: row["subjectKind"], ref: row["subjectRef"], label: row["subjectLabel"]),
+            score: row["score"],
+            comment: row["comment"],
+            at: Date(timeIntervalSince1970: row["at"]))
     }
 
     // MARK: - Local identity (device tier)

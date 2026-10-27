@@ -107,6 +107,21 @@ permission change, a return the owner's device has not mirrored) places nobody u
 is dated, and no cached share places nobody but the owner. A photo whose bytes are not
 here yet reads unverifiable. The unattested reads stay for callers that render no verdict.
 
+Ratings (0.5.4; the app's `Vision` → "Players, trust and reputation"): a rating is a
+signed, append-only fact in `orderRatings`, not a message kind — the chat renders it as an
+event row beside the messages. `postRating` refuses a score outside 1 to 5 and an order
+that is not a row here, and signs like the chat writers: the values the statement binds,
+the device's key published in the same transaction, the pair NULL when custody fails. The
+id is the caller's and never derived — a rating is a decision, so two equal ratings are
+two rows and a retry under one id is one. `attestedRatings` hands back every row with its
+verdict, oldest first; `effectiveRatings` selects, per author and subject, the latest row
+that reads verified or legacy (on a tie the smallest id), keeps the rows it superseded as
+that rating's history, and returns every other row beside them as not counted, never
+dropped. `ratingSummary` is the count and mean of one subject's counted ratings across
+the store's orders, one per author per order: the sender's own experience, derived at
+read and never persisted — not a reputation, since other senders' ratings live in shares
+this device is not in.
+
 One consumer-facing honesty note: the substrate never destroys bytes. A malformed
 legacy file is rescued aside as `*.corrupted-<t>-<id>.json` before the store opens;
 a failed open is a stored error to render, never a crash and never silent-empty.
