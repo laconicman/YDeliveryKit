@@ -87,8 +87,13 @@ public struct Party: Hashable, Sendable {
         /// A share participant — `kind` is the membership row's word
         /// (`participant`, `receiver`, `dispatcher`).
         case member(kind: String)
+        /// A share participant with read permission only: a member who may write
+        /// nothing, whatever role a row names.
+        case reader
         /// The courier the effective `legs` row names for `legRef`.
         case courier(legRef: UUID)
+        /// A party the read places but who holds no role as of the row's stamp — dated
+        /// past the owner's `removed` row. Reads *notEntitled*, never *unverifiable*.
         case unknown
     }
 

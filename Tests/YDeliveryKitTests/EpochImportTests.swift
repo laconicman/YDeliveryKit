@@ -303,16 +303,16 @@ struct EpochImportTests {
         #expect(try database.recordEvent(journal).statusAdvanced)
         let card = OrderEvent(orderID: order.id, at: t0 + 120, kind: OrderEvent.Kind.sighting,
                               providerStatus: "accepted", source: OrderEvent.Source.card)
-        #expect(card.id == search.id,
-                "without a revision the returned status keys like its first sighting")
+        #expect(card.id != search.id,
+                "without a revision the observation's own stamp keys it: a later return is a new row")
         let returned = try database.recordEvent(card)
-        #expect(!returned.inserted && returned.statusAdvanced,
-                "the row is swallowed, the mirror moved, and that is news")
+        #expect(returned.inserted && returned.statusAdvanced,
+                "a new row, the mirror moved, and that is news")
         #expect(try database.readOrders().first?.providerStatus == "accepted")
         let replay = try database.recordEvent(card)
         #expect(!replay.inserted && !replay.statusAdvanced,
                 "a replay carries the stored stamp: silent")
-        #expect(try database.events(orderID: order.id).count == 2)
+        #expect(try database.events(orderID: order.id).count == 3, "the search, the journal row, the return")
     }
 
     @Test("A replayed collided sighting at the mirror's own stamp stays silent")
@@ -333,9 +333,9 @@ struct EpochImportTests {
         #expect(try database.recordEvent(first).statusAdvanced)
         let again = OrderEvent(orderID: order.id, at: t + 200, kind: OrderEvent.Kind.sighting,
                                providerStatus: "A", source: OrderEvent.Source.card)
-        #expect(again.id == first.id)
+        #expect(again.id != first.id, "a later stamp is a new observation")
         let resight = try database.recordEvent(again)
-        #expect(!resight.inserted && !resight.statusAdvanced, "the same word: not news")
+        #expect(resight.inserted && !resight.statusAdvanced, "the same word: not news")
         let other = OrderEvent(orderID: order.id, providerEventID: 9, at: t + 200,
                                kind: OrderEvent.Kind.statusChanged, providerStatus: "B",
                                source: OrderEvent.Source.journal)

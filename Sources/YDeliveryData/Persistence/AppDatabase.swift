@@ -1223,30 +1223,41 @@ public final class AppDatabase: Sendable {
         // keyless derivation gets it re-derived under this device's key, so two
         // devices recording one fact write two rows rather than one merged record; a
         // caller-held id stays the caller's.
-        if let signatory, event.id == event.keylessDerivedID {
+        let keyless = event.keylessDerivedID
+        if let signatory, event.id == keyless {
             event.id = OrderEvent.derivedID(
                 orderID: event.orderID, providerEventID: event.providerEventID,
                 providerRevision: event.providerRevision,
                 providerStatus: event.providerStatus ?? event.kind,
-                routeDigest: event.routeDigest, writerKeyID: signatory.keyID)
+                routeDigest: event.routeDigest, at: event.at, writerKeyID: signatory.keyID)
         }
         return try queue.write { db in
-            if let signatory {
-                try Self.publishKeyIfNeeded(
-                    orderID: event.orderID, signatory: signatory, partyRef: event.authorRef, in: db)
+            // A fact already recorded under the keyless id — imported history, or a
+            // write custody failed to sign — is this fact: a signed replay adds no
+            // second row and is no news; the row stays as it is, never re-signed
+            // (review, PR #48).
+            let recordedKeyless = try event.id != keyless && Row.fetchOne(db, sql: """
+                SELECT 1 FROM "orderEvents" WHERE "id" = ?
+                """, arguments: Self.args([keyless])) != nil
+            var inserted = false
+            if !recordedKeyless {
+                if let signatory {
+                    try Self.publishKeyIfNeeded(
+                        orderID: event.orderID, signatory: signatory, partyRef: event.authorRef, in: db)
+                }
+                // A fact: `INSERT OR IGNORE` stated in the statement, never a column's
+                // REPLACE clause (doc:Schema → "Primary keys"), signed over exactly the
+                // values bound here (rule 3).
+                inserted = try Self.insertSigned(
+                    table: OrderEventRow.tableName,
+                    bindings: [
+                        event.id, event.orderID, event.legRef, event.providerEventID,
+                        event.providerRevision, event.at.timeIntervalSince1970, event.kind,
+                        event.providerStatus, event.detail, event.source, event.routeDigest,
+                        event.authorRef,
+                    ],
+                    signatory: signatory, into: db)
             }
-            // A fact: `INSERT OR IGNORE` stated in the statement, never a column's
-            // REPLACE clause (doc:Schema → "Primary keys"), signed over exactly the
-            // values bound here (rule 3).
-            let inserted = try Self.insertSigned(
-                table: OrderEventRow.tableName,
-                bindings: [
-                    event.id, event.orderID, event.legRef, event.providerEventID,
-                    event.providerRevision, event.at.timeIntervalSince1970, event.kind,
-                    event.providerStatus, event.detail, event.source, event.routeDigest,
-                    event.authorRef,
-                ],
-                signatory: signatory, into: db)
             var statusAdvanced = false
             if event.providerStatus != nil {
                 let stored = try Row.fetchOne(db, sql: """
@@ -1265,18 +1276,37 @@ public final class AppDatabase: Sendable {
                 // arrival order and never a banner (review, PR #45 rounds 1 and 2).
                 let newObservation = inserted
                     || (observedAt ?? -.infinity) < event.at.timeIntervalSince1970
-                try db.execute(sql: """
-                    UPDATE "orderProviderStates" SET
-                      "providerStatus" = ?,
-                      "providerDetail" = ?,
-                      "providerObservedAt" = ?
-                    WHERE "orderID" = ?
-                      AND ("providerObservedAt" IS NULL OR "providerObservedAt" <= ?)
-                    """, arguments: Self.args([
-                        event.providerStatus, event.detail,
-                        event.at.timeIntervalSince1970, event.orderID,
-                        event.at.timeIntervalSince1970,
-                    ]))
+                // At an exact stamp the mirror follows the one total order the verdicts
+                // use, not arrival: among the rows at this stamp a journal row beats a
+                // claim read beats `placed`, then the feed's operation id, then the
+                // higher revision, then the smallest id — so the mirror and
+                // `mirrorIntegrity` agree on what may be the staler word rather than
+                // disagree by arrival (review, PR #48).
+                let stamp = event.at.timeIntervalSince1970
+                var outranked = false
+                if observedAt == stamp {
+                    let peers = try Row.fetchAll(db, sql: """
+                        SELECT * FROM "orderEvents" WHERE "orderID" = ? AND "at" = ?
+                        """, arguments: Self.args([event.orderID, stamp])).map(Self.orderEvent)
+                    if let winner = peers.max(by: Self.precedes), winner.id != event.id,
+                       winner.id != keyless {
+                        outranked = true
+                    }
+                }
+                var changed = false
+                if !outranked {
+                    try db.execute(sql: """
+                        UPDATE "orderProviderStates" SET
+                          "providerStatus" = ?,
+                          "providerDetail" = ?,
+                          "providerObservedAt" = ?
+                        WHERE "orderID" = ?
+                          AND ("providerObservedAt" IS NULL OR "providerObservedAt" <= ?)
+                        """, arguments: Self.args([
+                            event.providerStatus, event.detail, stamp, event.orderID, stamp,
+                        ]))
+                    changed = db.changesCount > 0
+                }
                 // The WHERE gate is the freshness check — a stale event updates
                 // zero rows — and only a word that differs from the stored one
                 // counts as the status having moved. `inserted` joins the gate
@@ -1285,7 +1315,7 @@ public final class AppDatabase: Sendable {
                 // news: re-announcing it would ping-pong banners on a cursor
                 // reset (review, PR #7). A collision stamped past the mirror's own
                 // stamp is the one non-inserted case that is news (`newObservation`).
-                statusAdvanced = newObservation && db.changesCount > 0
+                statusAdvanced = newObservation && changed
                     && previous != event.providerStatus
             }
             if inserted {

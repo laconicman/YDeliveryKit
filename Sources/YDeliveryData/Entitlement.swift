@@ -26,7 +26,7 @@ public enum Entitlement {
             return memberWritable.contains(table)
         case .courier(let leg):
             return table == OrderEventRow.tableName ? legRef == leg : memberWritable.contains(table)
-        case .unknown:
+        case .reader, .unknown:
             return false
         }
     }

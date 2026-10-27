@@ -94,7 +94,12 @@ writer's key, so two devices recording one fact write two rows. The attested rea
 with a verdict each, computed from the stored row and the key row its `signingKeyID`
 names, the key's binding resolved through the authority, entitlement judged as of the
 row's stamp; events are deduped by fact at read. `mirrorIntegrity` and `routeIntegrity`
-check the projections against the latest verified fact under one total order. The
+check the projections against the latest verified fact under one total order, and the
+mirror itself follows that order at an equal stamp, so the two agree. A revisionless
+sighting keys on its own stamp; a signed replay of a fact already recorded unsigned adds
+no row. The share's permission gates writing — a participant it lists read-only is a
+reader — and a party it no longer lists verifies nothing until the owner's `removed` row
+dates the departure; a photo whose bytes are not here yet reads unverifiable. The
 unattested reads stay for callers that render no verdict.
 
 One consumer-facing honesty note: the substrate never destroys bytes. A malformed

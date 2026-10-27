@@ -44,11 +44,21 @@ struct PartyBook {
         }
     }
 
-    /// The party's role as of a stamp: the owner is the order's owner (this device on
-    /// a private order); a member is a party whose effective membership row as of the
-    /// stamp names a role other than `removed`, or, before the owner's device has
-    /// reconciled one, a party the authority lists as a participant.
-    func role(of party: UUID?, mine: Bool, asOf stamp: Date) -> Party.Role {
+    /// The party's role as of a stamp, or `nil` for a party this read cannot place.
+    /// The owner is the order's owner (this device on a private order); a member is a
+    /// party whose effective membership row as of the stamp names a role other than
+    /// `removed`, or, before the owner's device has reconciled one, a party the
+    /// authority lists as a participant; `.unknown` is a placed party with no role as
+    /// of the stamp — dated past the owner's `removed` row — and reads *notEntitled*.
+    /// Two rules from review (PR #48): the share's permission gates writing whatever a
+    /// row names, so a participant the share lists read-only is a reader; and a party
+    /// the share no longer lists cannot be placed until the owner's `removed` row dates
+    /// the departure — nothing of theirs verifies meanwhile, quietly — after which the
+    /// as-of-row rule holds again: what they wrote while a member stays verified, what
+    /// is dated after the removal reads *notEntitled*. The server does not deliver a
+    /// row written after a removal; a row dated back into the role is the writer's
+    /// claim that the server `creationDate` bound (the adoption) checks.
+    func role(of party: UUID?, mine: Bool, asOf stamp: Date) -> Party.Role? {
         switch ownership {
         case .local where mine || (party != nil && party == localParty):
             return .owner
@@ -57,14 +67,18 @@ struct PartyBook {
         default:
             break
         }
-        guard let party else { return .unknown }
-        if let effective = Membership.effective(among: memberships.filter { $0.partyRef == party }, asOf: stamp) {
+        guard let party else { return nil }
+        let listed = members.first { $0.ref == party && !$0.isOwner }
+        if let listed, !listed.canWrite { return .reader }
+        let rows = memberships.filter { $0.partyRef == party }
+        if listed == nil, !members.isEmpty,
+           Membership.effective(among: rows)?.role != Membership.Role.removed {
+            return nil
+        }
+        if let effective = Membership.effective(among: rows, asOf: stamp) {
             return effective.role == Membership.Role.removed ? .unknown : .member(kind: effective.role)
         }
-        if members.contains(where: { $0.ref == party && !$0.isOwner }) {
-            return .member(kind: Membership.Role.participant)
-        }
-        return .unknown
+        return listed != nil ? .member(kind: Membership.Role.participant) : nil
     }
 
     /// The verdict on one row of `table`, from its stored signing columns and the
@@ -94,8 +108,11 @@ struct PartyBook {
             return .untrustedKey
         }
         if let authorRef, let party, authorRef != party { return .invalid }
-        let role = role(of: party, mine: mine, asOf: stamp)
-        guard role != .unknown || mine else { return .unverifiable }
+        // This device's own key is placed by definition; anyone else the read cannot
+        // place is not yet verifiable.
+        guard let role = role(of: party, mine: mine, asOf: stamp) ?? (mine ? .unknown : nil) else {
+            return .unverifiable
+        }
         let author = Party(ref: party, displayName: members.first { $0.ref == party }?.displayName, role: role)
         return Entitlement.mayWrite(role, table: table, legRef: legRef)
             ? .verified(author: author) : .notEntitled(author: author)
@@ -244,8 +261,14 @@ extension AppDatabase {
         var verdict = book.verdict(
             table: OrderAttachmentRow.tableName, legRef: nil, stamp: attachment.createdAt, payload: payload,
             signingKeyID: row["signingKeyID"], signature: row["signature"], authorRef: attachment.authorRef)
-        if verdict.isVerified, let blob, let dataHash = attachment.dataHash, Self.dataHash(of: blob) != dataHash {
-            verdict = .invalid
+        if verdict.isVerified {
+            // The bytes are what the hash binds: absent, nothing is checked and the row
+            // is not yet verifiable; present and different, the row claims bytes it
+            // does not hold (review, PR #48).
+            guard let blob else { return Attested(value: attachment, verdict: .unverifiable) }
+            if let dataHash = attachment.dataHash, Self.dataHash(of: blob) != dataHash {
+                verdict = .invalid
+            }
         }
         return Attested(value: attachment, verdict: verdict)
     }
@@ -261,11 +284,16 @@ extension AppDatabase {
 
     /// The one total order over the verified rows (the app's Collaboration →
     /// "Verdicts and entitlement"): by `at`; on a tie by family — a journal row beats a
-    /// claim read beats the app's own `placed`; then, within one family, the higher
+    /// claim read beats the app's own `placed`; then, within one family, the feed's
+    /// own order — the higher operation id, two transitions in one second being feed
+    /// order and never a coin toss (review, PR #48) — then the higher
     /// `providerRevision`; then the smallest id. `precedes` says `a` ranks below `b`.
-    private static func precedes(_ a: OrderEvent, _ b: OrderEvent) -> Bool {
+    static func precedes(_ a: OrderEvent, _ b: OrderEvent) -> Bool {
         guard a.at == b.at else { return a.at < b.at }
         guard family(of: a) == family(of: b) else { return family(of: a) < family(of: b) }
+        guard a.providerEventID == b.providerEventID else {
+            return (a.providerEventID ?? .min) < (b.providerEventID ?? .min)
+        }
         guard a.providerRevision == b.providerRevision else {
             return (a.providerRevision ?? .min) < (b.providerRevision ?? .min)
         }

@@ -1897,11 +1897,13 @@ struct PersistenceTests {
         #expect(observedAt == 1000)
     }
 
-    /// A sighting has no feed id — the same status seen again derives the same
-    /// row and dedupes out of the timeline. But the mirror must still move: the
-    /// repeat *is* fresh information ("still this status, as of now") and its
-    /// detail may have changed (review, PR #6).
-    @Test("A repeated sighting refreshes the mirror without a second timeline row")
+    /// A sighting has no feed id — the same status seen again at the same stamp
+    /// derives the same row and dedupes out of the timeline. Seen again at a later
+    /// stamp it is a new observation and its own row (review, PR #48: a status that
+    /// returns later must have a row the signed history can select), and the mirror
+    /// follows it: the repeat *is* fresh information ("still this status, as of now")
+    /// and its detail may have changed (review, PR #6).
+    @Test("A repeated sighting at a later stamp is a new row and refreshes the mirror; at the same stamp it is the same row")
     func repeatedSightingRefreshesMirror() throws {
         let database = makeDatabase()
         let order = Order(
@@ -1914,12 +1916,15 @@ struct PersistenceTests {
             orderID: order.id, at: Date(timeIntervalSince1970: 1000),
             kind: "status", providerStatus: "delivery_arrived",
             detail: "courier waiting", source: "card"))
-        #expect(try !database.recordEvent(OrderEvent(
+        let later = OrderEvent(
             orderID: order.id, at: Date(timeIntervalSince1970: 1300),
             kind: "status", providerStatus: "delivery_arrived",
-            detail: "courier called", source: "card")).inserted,
-                "same status from the same source is the same sighting — no second row")
-        #expect(try database.events(orderID: order.id).count == 1)
+            detail: "courier called", source: "card")
+        #expect(try database.recordEvent(later) == OrderEventOutcome(inserted: true, statusAdvanced: false),
+                "a later stamp is a new observation and its own row; the same word is not news")
+        #expect(try !database.recordEvent(later).inserted,
+                "the same status at the same stamp is the same sighting — no second row")
+        #expect(try database.events(orderID: order.id).count == 2)
 
         let mirror: Row? = try database.queue.read { db in
             try Row.fetchOne(db, sql: """

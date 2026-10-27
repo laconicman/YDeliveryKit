@@ -73,9 +73,10 @@ public struct OrderEvent: Codable, Hashable, Identifiable, Sendable {
     /// - Parameter providerRevision: the wire's `revision` — the journal event's own,
     ///   the claim card's — part of a sighting's identity: a re-sight of one revision
     ///   is a no-op, a later revision a new fact. Without it (the pre-epoch shape, or
-    ///   a caller that has none) every observation of one status keys alike, so a
-    ///   status that returns after another one collapses into its first row; the
-    ///   mirror still moves and ``AppDatabase/recordEvent(_:)`` still announces it.
+    ///   a caller that has none) the observation's own stamp stands in for it — the
+    ///   provider's `updated_ts`, never the device's clock — so a re-sight of one card
+    ///   state is still a no-op and a status that returns later is a new row (review,
+    ///   PR #48).
     /// - Parameter writerKeyID: the signing key's id, once a writer has one — it
     ///   joins the derivation so two devices recording the same fact write two
     ///   rows rather than one CloudKit record (the trust layer's rule 1).
@@ -101,7 +102,7 @@ public struct OrderEvent: Codable, Hashable, Identifiable, Sendable {
                 orderID: orderID, providerEventID: providerEventID,
                 providerRevision: providerRevision,
                 providerStatus: providerStatus ?? kind,
-                routeDigest: routeDigest, writerKeyID: writerKeyID)
+                routeDigest: routeDigest, at: at, writerKeyID: writerKeyID)
         }
         self.orderID = orderID
         self.legRef = legRef
@@ -126,19 +127,19 @@ public struct OrderEvent: Codable, Hashable, Identifiable, Sendable {
     var keylessDerivedID: UUID {
         Self.derivedID(
             orderID: orderID, providerEventID: providerEventID, providerRevision: providerRevision,
-            providerStatus: providerStatus ?? kind, routeDigest: routeDigest, writerKeyID: nil)
+            providerStatus: providerStatus ?? kind, routeDigest: routeDigest, at: at, writerKeyID: nil)
     }
 
     static func derivedID(
         orderID: UUID, providerEventID: Int64?, providerRevision: Int64?,
-        providerStatus: String, routeDigest: String?, writerKeyID: String?
+        providerStatus: String, routeDigest: String?, at: Date, writerKeyID: String?
     ) -> UUID {
         var components = [orderID.uuidString]
         if let providerEventID {
             components.append(String(providerEventID))
         } else {
             components.append(contentsOf: [
-                providerRevision.map(String.init) ?? "",
+                providerRevision.map(String.init) ?? String(at.timeIntervalSince1970),
                 providerStatus,
                 routeDigest ?? "",
             ])

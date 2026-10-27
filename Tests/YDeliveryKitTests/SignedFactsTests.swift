@@ -74,7 +74,7 @@ struct SignedFactsTests {
         #expect(stored[0].id != event.id, "the derived id carries the writer's key (rule 1)")
         #expect(stored[0].id == OrderEvent.derivedID(
             orderID: order.id, providerEventID: 1, providerRevision: 1, providerStatus: "accepted",
-            routeDigest: nil, writerKeyID: try database.signatory().keyID))
+            routeDigest: nil, at: event.at, writerKeyID: try database.signatory().keyID))
         #expect(try database.participantKeys(orderID: order.id).count == 1, "the key is published with the first write")
         let attested = try database.attestedEvents(orderID: order.id, authority: try privateAuthority(database))
         #expect(attested.count == 1)
@@ -263,10 +263,24 @@ struct SignedFactsTests {
         // At one stamp, the journal beats a card.
         try database.recordEvent(sighting("ready_for_approval", revision: 2, at: 1_100, orderID: order.id))
         #expect(try database.mirrorIntegrity(orderID: order.id, authority: authority) == .disagrees(expected: "accepted"))
-        // Within one family, the higher revision wins.
+        // Within one family, the higher revision wins — and the mirror follows the
+        // same order at an equal stamp, whatever arrives last.
         try database.recordEvent(sighting("pickuped", revision: 3, at: 1_300, orderID: order.id))
         try database.recordEvent(sighting("accepted", revision: 2, at: 1_300, orderID: order.id))
+        #expect(try database.readOrders().first?.providerStatus == "pickuped")
+        #expect(try database.mirrorIntegrity(orderID: order.id, authority: authority) == .consistent)
+        try database.queue.write { db in
+            try db.execute(sql: """
+                UPDATE "orderProviderStates" SET "providerStatus" = 'accepted' WHERE "orderID" = ?
+                """, arguments: AppDatabase.args([order.id]))
+        }
         #expect(try database.mirrorIntegrity(orderID: order.id, authority: authority) == .disagrees(expected: "pickuped"))
+        // Within the journal family, two transitions in one second are feed order.
+        let feed = try recordOrder(in: database)
+        try database.recordEvent(journal("accepted", id: 1, at: 1_100, orderID: feed.id))
+        #expect(try database.recordEvent(journal("performer_found", id: 2, at: 1_100, orderID: feed.id)).statusAdvanced)
+        #expect(try database.readOrders().first { $0.id == feed.id }?.providerStatus == "performer_found")
+        #expect(try database.mirrorIntegrity(orderID: feed.id, authority: authority) == .consistent)
     }
 
     @Test("The route agrees with the latest signed digest, disagrees when a stop is rewritten, and recovers on a fresh sighting")
@@ -319,6 +333,123 @@ struct SignedFactsTests {
         let withStranger = try phone.attestedEvents(orderID: order.id, authority: authority)
         #expect(withStranger.count == 3, "an unresolvable row folds with nothing")
         #expect(withStranger.contains { $0.verdict == .unverifiable })
+    }
+
+    @Test("A signed replay of a fact already recorded unsigned adds no row and is no news")
+    func keylessReplayAddsNoRow() throws {
+        let database = makeDatabase()
+        let authority = try privateAuthority(database)
+        let order = try recordOrder(in: database)
+        let event = journal("accepted", id: 42, at: 1_100, orderID: order.id)
+        // Imported history: the keyless id, no signature, no key rows.
+        try database.queue.write { db in
+            try db.execute(sql: """
+                INSERT INTO "orderEvents" ("id", "orderID", "providerEventID", "providerRevision", "at", "kind", "providerStatus", "source")
+                VALUES (?, ?, 42, 1, 1100, 'status_changed', 'accepted', 'journal')
+                """, arguments: AppDatabase.args([event.id, order.id]))
+        }
+        let replay = try database.recordEvent(event)
+        #expect(!replay.inserted, "no second row for the same fact")
+        #expect(try database.events(orderID: order.id).count == 1)
+        #expect(try database.attestedEvents(orderID: order.id, authority: authority).map(\.verdict) == [.legacy],
+                "the old row stays as it is, never re-signed")
+    }
+
+    @Test("A revisionless status that returns later is a fresh signed row, and the mirror agrees with it")
+    func revisionlessReturnIsAFreshRow() throws {
+        let database = makeDatabase()
+        let authority = try privateAuthority(database)
+        let order = try recordOrder(in: database)
+        func revisionless(_ status: String, at: TimeInterval) -> OrderEvent {
+            OrderEvent(orderID: order.id, at: Date(timeIntervalSince1970: at), kind: OrderEvent.Kind.sighting,
+                       providerStatus: status, source: OrderEvent.Source.card)
+        }
+        try database.recordEvent(revisionless("accepted", at: 1_100))
+        try database.recordEvent(journal("pickuped", id: 2, at: 1_200, orderID: order.id))
+        #expect(try database.recordEvent(revisionless("accepted", at: 1_300)).inserted)
+        #expect(!(try database.recordEvent(revisionless("accepted", at: 1_300)).inserted), "a re-sight of one card state is a no-op")
+        #expect(try database.events(orderID: order.id).count == 3)
+        #expect(try database.mirrorIntegrity(orderID: order.id, authority: authority) == .consistent)
+    }
+
+    @Test("At one stamp the mirror follows the total order, not arrival: a card after a journal row does not move it")
+    func equalStampMirrorFollowsTheOrder() throws {
+        let database = makeDatabase()
+        let authority = try privateAuthority(database)
+        let order = try recordOrder(in: database)
+        try database.recordEvent(journal("accepted", id: 1, at: 1_100, orderID: order.id))
+        let card = try database.recordEvent(sighting("pickuped", revision: 2, at: 1_100, orderID: order.id))
+        #expect(card.inserted && !card.statusAdvanced, "recorded, outranked at this stamp")
+        #expect(try database.readOrders().first?.providerStatus == "accepted")
+        #expect(try database.mirrorIntegrity(orderID: order.id, authority: authority) == .consistent)
+        // The journal row arriving second at the same stamp takes the mirror.
+        let other = try recordOrder(in: database)
+        try database.recordEvent(sighting("pickuped", revision: 2, at: 1_100, orderID: other.id))
+        #expect(try database.recordEvent(journal("accepted", id: 1, at: 1_100, orderID: other.id)).statusAdvanced)
+        #expect(try database.readOrders().first { $0.id == other.id }?.providerStatus == "accepted")
+        #expect(try database.mirrorIntegrity(orderID: other.id, authority: authority) == .consistent)
+    }
+
+    @Test("A read-only participant is a reader: their signed message reads notEntitled")
+    func readOnlyMemberIsNotEntitled() throws {
+        let owner = makeDatabase()
+        let order = try recordOrder(in: owner)
+        let reader = party("_reader")
+        let readerDevice = makeDatabase(keyStore: EphemeralKeyStore())
+        try readerDevice.postMessage(OrderMessage(orderID: order.id, kind: OrderMessage.Kind.text, text: "hi", authorRef: reader))
+        let authority = TrustRowsTests.FakeAuthority(
+            localParty: me, owner: me, participants: [Member(ref: reader, canWrite: false)],
+            stamps: [try readerDevice.signatory().keyID: reader], myKeyID: try owner.signatory().keyID)
+        let verdict = try owner.attestedMessages(orderID: order.id, authority: authority)[0].verdict
+        #expect(verdict == .notEntitled(author: Party(ref: reader, role: .reader)))
+    }
+
+    @Test("A member the share no longer lists verifies nothing until the departure is dated; then what they wrote as a member comes back")
+    func departedMemberUntilDated() throws {
+        let owner = makeDatabase()
+        let order = try recordOrder(in: owner)
+        let irina = party("_irina")
+        let irinaDevice = makeDatabase(keyStore: EphemeralKeyStore())
+        let irinaKey = try irinaDevice.signatory().keyID
+        func authority(listing: [Member]) throws -> TrustRowsTests.FakeAuthority {
+            TrustRowsTests.FakeAuthority(localParty: me, owner: me, participants: listing,
+                                         stamps: [irinaKey: irina], myKeyID: try owner.signatory().keyID)
+        }
+        func post(_ text: String, at: TimeInterval) throws {
+            try irinaDevice.postMessage(OrderMessage(orderID: order.id, sentAt: Date(timeIntervalSince1970: at),
+                                                     kind: OrderMessage.Kind.text, text: text, authorRef: irina))
+        }
+        let listed = try authority(listing: [Member(ref: irina, canWrite: true)])
+        try owner.reconcileMemberships(orderID: order.id, authority: listed, at: Date(timeIntervalSince1970: 1_050))
+        try post("while a member", at: 1_100)
+        #expect(try owner.attestedMessages(orderID: order.id, authority: listed)[0].verdict.isVerified)
+        // She leaves: the share no longer lists her and no row dates it yet.
+        let gone = try authority(listing: [])
+        #expect(try owner.attestedMessages(orderID: order.id, authority: gone)[0].verdict == .unverifiable,
+                "an undated departure places nobody: nothing of hers verifies, quietly")
+        // The owner's device dates it; a row stamped after is hers and not entitled.
+        try owner.reconcileMemberships(orderID: order.id, authority: gone, at: Date(timeIntervalSince1970: 1_200))
+        try post("after", at: 1_300)
+        let verdicts = try owner.attestedMessages(orderID: order.id, authority: gone).map(\.verdict)
+        #expect(verdicts == [
+            .verified(author: Party(ref: irina, role: .member(kind: Membership.Role.participant))),
+            .notEntitled(author: Party(ref: irina, role: .unknown)),
+        ], "what she wrote as a member stays verified; what is dated after the removal is named and not entitled")
+    }
+
+    @Test("A photo whose bytes are not here yet reads unverifiable, not verified")
+    func missingPhotoBytesAreUnverifiable() throws {
+        let database = makeDatabase()
+        let authority = try privateAuthority(database)
+        let order = try recordOrder(in: database)
+        let posted = try database.postPhotoMessage(orderID: order.id, data: Data([1, 2, 3]))
+        let attachmentID = try #require(posted.attachmentRef)
+        try database.queue.write { db in
+            try db.execute(sql: """
+                DELETE FROM "attachmentBlobs" WHERE "attachmentID" = ?
+                """, arguments: AppDatabase.args([attachmentID]))
+        }
+        #expect(try database.attestedAttachment(attachmentID, authority: authority)?.verdict == .unverifiable)
     }
 
     @Test("Models carry no verdict in their Codable output")

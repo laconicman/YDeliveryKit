@@ -45,6 +45,11 @@ the diff-level cues and the noise filters.
   that bypasses `insertSigned`, a `SELECT` that feeds a signature, a signature pair
   written stale rather than NULL on a custody failure, and an attested read that throws
   on a bad signature or drops a row: verdicts render beside the data, never refuse it.
+- Flag a projection update that settles an equal-stamp tie by arrival rather than
+  `AppDatabase.precedes`, and a role resolution that places a party the share no
+  longer lists from membership rows alone: the mirror and `mirrorIntegrity` share one
+  total order, and an undated departure places nobody until the owner's `removed` row
+  dates it (review, PR #48).
 - Flag `ON CONFLICT REPLACE` on any shared-tier primary key, and a bare `INSERT` on a
   fact table (`orderEvents`, `orderMessages`, `orderAttachments`, `participantKeys`,
   `memberships`, `orderRatings`) that does not state its policy — `INSERT OR IGNORE`
