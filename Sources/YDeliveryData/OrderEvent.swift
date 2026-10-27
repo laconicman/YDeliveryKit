@@ -73,9 +73,10 @@ public struct OrderEvent: Codable, Hashable, Identifiable, Sendable {
     /// - Parameter providerRevision: the wire's `revision` — the journal event's own,
     ///   the claim card's — part of a sighting's identity: a re-sight of one revision
     ///   is a no-op, a later revision a new fact. Without it (the pre-epoch shape, or
-    ///   a caller that has none) every observation of one status keys alike, so a
-    ///   status that returns after another one collapses into its first row; the
-    ///   mirror still moves and ``AppDatabase/recordEvent(_:)`` still announces it.
+    ///   a caller that has none) the observation's own stamp stands in for it — the
+    ///   provider's `updated_ts`, never the device's clock — so a re-sight of one card
+    ///   state is still a no-op and a status that returns later is a new row (review,
+    ///   PR #48).
     /// - Parameter writerKeyID: the signing key's id, once a writer has one — it
     ///   joins the derivation so two devices recording the same fact write two
     ///   rows rather than one CloudKit record (the trust layer's rule 1).
@@ -101,7 +102,7 @@ public struct OrderEvent: Codable, Hashable, Identifiable, Sendable {
                 orderID: orderID, providerEventID: providerEventID,
                 providerRevision: providerRevision,
                 providerStatus: providerStatus ?? kind,
-                routeDigest: routeDigest, writerKeyID: writerKeyID)
+                routeDigest: routeDigest, at: at, writerKeyID: writerKeyID)
         }
         self.orderID = orderID
         self.legRef = legRef
@@ -120,16 +121,36 @@ public struct OrderEvent: Codable, Hashable, Identifiable, Sendable {
     /// by its operation id, a sighting by revision, status and route digest.
     /// Absent components encode as empty strings — the separator can never occur
     /// inside a component (UUIDs, integers, hex digests, status words, key ids).
+    /// The id this event would carry under the keyless derivation — what a caller
+    /// gets from the initialiser without a `writerKeyID`, and what the writer
+    /// re-derives under its own key before inserting (rule 1).
+    var keylessDerivedID: UUID {
+        Self.derivedID(
+            orderID: orderID, providerEventID: providerEventID, providerRevision: providerRevision,
+            providerStatus: providerStatus ?? kind, routeDigest: routeDigest, at: at, writerKeyID: nil)
+    }
+
+    /// The id this fact derived before 0.5.3 when it is a revisionless sighting — an
+    /// empty component where the revision would be, every observation of one status
+    /// keyed alike — and `nil` when the derivation is unchanged. The writer probes it
+    /// with the stamp, so an observation stored before the upgrade is recognised on
+    /// replay and a later one is a new row (review, PR #48).
+    var formerKeylessDerivedID: UUID? {
+        guard providerEventID == nil, providerRevision == nil else { return nil }
+        return .derived(namespace: UUID.DerivedNamespace.providerEvent,
+                        [orderID.uuidString, "", providerStatus ?? kind, routeDigest ?? ""])
+    }
+
     static func derivedID(
         orderID: UUID, providerEventID: Int64?, providerRevision: Int64?,
-        providerStatus: String, routeDigest: String?, writerKeyID: String?
+        providerStatus: String, routeDigest: String?, at: Date, writerKeyID: String?
     ) -> UUID {
         var components = [orderID.uuidString]
         if let providerEventID {
             components.append(String(providerEventID))
         } else {
             components.append(contentsOf: [
-                providerRevision.map(String.init) ?? "",
+                providerRevision.map(String.init) ?? String(at.timeIntervalSince1970),
                 providerStatus,
                 routeDigest ?? "",
             ])

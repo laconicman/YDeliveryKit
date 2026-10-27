@@ -10,8 +10,8 @@ public enum Entitlement {
     /// Whether `role` may write a row of `table`; `legRef` is the row's leg, `nil` for
     /// the order's own platform leg and the `placed` event.
     ///
-    /// Members (receiver, dispatcher, participant) write the chat, photos and ratings;
-    /// a courier additionally writes the events of its own leg; the owner writes
+    /// Members (receiver, dispatcher, participant) write the chat, photos and ratings,
+    /// a reader nothing; a courier additionally writes the events of its own leg; the owner writes
     /// anything, memberships and legs included. `participantKeys` answers false here
     /// for everyone: a key row is entitled only to the party its binding names, which
     /// is the binding's own check, not a role's.
@@ -22,8 +22,8 @@ public enum Entitlement {
         switch role {
         case .owner:
             return table != ParticipantKeyRow.tableName
-        case .member:
-            return memberWritable.contains(table)
+        case .member(let kind):
+            return kind != Membership.Role.reader && memberWritable.contains(table)
         case .courier(let leg):
             return table == OrderEventRow.tableName ? legRef == leg : memberWritable.contains(table)
         case .unknown:

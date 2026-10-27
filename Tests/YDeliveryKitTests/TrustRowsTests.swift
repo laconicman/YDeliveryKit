@@ -55,6 +55,8 @@ struct TrustRowsTests {
         var myKeyID: String?
         /// A shared order whose owner this device cannot resolve yet.
         var ownerUnresolved = false
+        /// A shared order whose share is not cached here: no roster at all.
+        var rosterUnavailable = false
 
         func binding(of key: ParticipantKey) -> KeyBinding {
             if let stamped = stamps[key.keyID] {
@@ -69,7 +71,8 @@ struct TrustRowsTests {
         }
 
         func members(of orderID: Order.ID) -> [Member] {
-            (owner.map { [Member(ref: $0, canWrite: true, isOwner: true)] } ?? []) + participants
+            if rosterUnavailable { return [] }
+            return (owner.map { [Member(ref: $0, canWrite: true, isOwner: true)] } ?? []) + participants
         }
     }
 
@@ -237,6 +240,70 @@ struct TrustRowsTests {
         #expect(readmitted == MembershipReconciliation(mirrored: 1, removed: 0), "a return after a removal is a new row")
         let sergeiAgain = try database.memberships(orderID: order.id).filter { $0.partyRef == party("_sergei") }
         #expect(sergeiAgain.count == 3 && Membership.effective(among: sergeiAgain)?.role == Membership.Role.participant)
+    }
+
+    @Test("The reconcile mirrors the share's permission: a reader row, a new row per change, idempotent, the admission id unchanged")
+    func reconcileMirrorsPermission() throws {
+        let database = makeDatabase()
+        let order = try recordOrder(in: database)
+        let me = party("_me"), irina = party("_irina")
+        var authority = FakeAuthority(
+            localParty: me, owner: me, participants: [member("_irina", canWrite: false)],
+            myKeyID: try database.signatory().keyID)
+        let t0 = Date(timeIntervalSince1970: 1_000)
+        let keyID = try database.signatory().keyID
+
+        #expect(try database.reconcileMemberships(orderID: order.id, authority: authority, at: t0)
+                == MembershipReconciliation(mirrored: 1, removed: 0))
+        var rows = try database.memberships(orderID: order.id)
+        #expect(rows.map(\.role) == [Membership.Role.reader], "listed read-only: admitted as a reader")
+        #expect(rows[0].id == Membership.mirroredID(orderID: order.id, partyRef: irina, writerKeyID: keyID, generation: 0),
+                "the admission row's id is what 0.5.2 derived")
+        #expect(try database.reconcileMemberships(orderID: order.id, authority: authority, at: t0 + 1)
+                == MembershipReconciliation(mirrored: 0, removed: 0), "a second pass writes nothing")
+
+        authority.participants = [member("_irina", canWrite: true)]
+        #expect(try database.reconcileMemberships(orderID: order.id, authority: authority, at: t0 + 10)
+                == MembershipReconciliation(mirrored: 1, removed: 0), "a restored permission is a new row")
+        rows = try database.memberships(orderID: order.id)
+        #expect(rows.count == 2 && Membership.effective(among: rows)?.role == Membership.Role.participant)
+        #expect(Membership.effective(among: rows, asOf: t0 + 5)?.role == Membership.Role.reader,
+                "the change is dated: as of before it she was a reader")
+
+        authority.participants = [member("_irina", canWrite: false)]
+        #expect(try database.reconcileMemberships(orderID: order.id, authority: authority, at: t0 + 20)
+                == MembershipReconciliation(mirrored: 1, removed: 0), "a downgrade is a new row")
+        rows = try database.memberships(orderID: order.id)
+        #expect(rows.count == 3 && Membership.effective(among: rows)?.role == Membership.Role.reader)
+        #expect(Set(rows.map(\.id)).count == 3, "three rows, three ids")
+        #expect(try database.reconcileMemberships(orderID: order.id, authority: authority, at: t0 + 21)
+                == MembershipReconciliation(mirrored: 0, removed: 0))
+    }
+
+    @Test("Restored write permission brings back the role the owner's rows last gave, participant only where there was none")
+    func permissionRestorationRestoresTheAssignedRole() throws {
+        let database = makeDatabase()
+        let order = try recordOrder(in: database)
+        let me = party("_me"), irina = party("_irina"), sergei = party("_sergei")
+        var authority = FakeAuthority(
+            localParty: me, owner: me, participants: [member("_irina"), member("_sergei", canWrite: false)],
+            myKeyID: try database.signatory().keyID)
+        let t0 = Date(timeIntervalSince1970: 1_000)
+        try database.reconcileMemberships(orderID: order.id, authority: authority, at: t0)
+        try database.setMembershipRole(orderID: order.id, partyRef: irina, role: Membership.Role.receiver,
+                                       localParty: me, at: t0 + 5)
+        func role(of party: UUID) throws -> String? {
+            Membership.effective(among: try database.memberships(orderID: order.id).filter { $0.partyRef == party })?.role
+        }
+        authority.participants = [member("_irina", canWrite: false), member("_sergei", canWrite: false)]
+        try database.reconcileMemberships(orderID: order.id, authority: authority, at: t0 + 10)
+        #expect(try role(of: irina) == Membership.Role.reader, "read-only: a reader, whatever she was")
+        authority.participants = [member("_irina"), member("_sergei")]
+        #expect(try database.reconcileMemberships(orderID: order.id, authority: authority, at: t0 + 20)
+                == MembershipReconciliation(mirrored: 2, removed: 0))
+        #expect(try role(of: irina) == Membership.Role.receiver, "the receiver is a receiver again")
+        #expect(try role(of: sergei) == Membership.Role.participant,
+                "a reader from admission who may write now is a participant, as on admission")
     }
 
     @Test("A role assignment is a caller-held row; a retry under the same id is one row; the next reconcile leaves it alone")

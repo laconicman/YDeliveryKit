@@ -1215,24 +1215,67 @@ public final class AppDatabase: Sendable {
     /// the status's own. `lastActivityAt` moves forward only.
     @discardableResult
     public func recordEvent(_ event: OrderEvent) throws -> OrderEventOutcome {
-        try queue.write { db in
-            // A fact: `INSERT OR IGNORE` stated in the statement, never a column's
-            // REPLACE clause (doc:Schema → "Primary keys"). The signing triple is
-            // written NULL until the trust layer signs what it binds.
-            try db.execute(sql: """
-                INSERT OR IGNORE INTO "orderEvents"
-                  ("id", "orderID", "legRef", "providerEventID", "providerRevision",
-                   "at", "kind", "providerStatus", "detail", "source", "routeDigest",
-                   "authorRef", "signingKeyID", "signature")
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
-                """, arguments: Self.args([
-                    event.id, event.orderID, event.legRef, event.providerEventID,
-                    event.providerRevision,
-                    event.at.timeIntervalSince1970, event.kind,
-                    event.providerStatus, event.detail, event.source,
-                    event.routeDigest, event.authorRef,
-                ]))
-            let inserted = db.changesCount > 0
+        // The key is resolved before the transaction (never inside one); a custody
+        // failure this time writes the row unsigned, which is the truth about it.
+        let signatory = try? signatory()
+        var event = event
+        // A derived id carries the writer's key (rule 1): a caller that kept the
+        // keyless derivation gets it re-derived under this device's key, so two
+        // devices recording one fact write two rows rather than one merged record; a
+        // caller-held id stays the caller's.
+        let keyless = event.keylessDerivedID
+        let derived = event.id == keyless
+        if let signatory, derived {
+            event.id = OrderEvent.derivedID(
+                orderID: event.orderID, providerEventID: event.providerEventID,
+                providerRevision: event.providerRevision,
+                providerStatus: event.providerStatus ?? event.kind,
+                routeDigest: event.routeDigest, at: event.at, writerKeyID: signatory.keyID)
+        }
+        return try queue.write { db in
+            // A fact already recorded under the keyless id — imported history, or a
+            // write custody failed to sign — is this fact: a signed replay adds no
+            // second row and is no news; the row stays as it is, never re-signed
+            // (review, PR #48).
+            // Both probes concern a derived identity: a caller-held id is the caller's
+            // fact, whatever the derivation would say, and its own `INSERT OR IGNORE`
+            // is its replay check (round 3).
+            var recorded = try derived && event.id != keyless && Row.fetchOne(db, sql: """
+                SELECT 1 FROM "orderEvents" WHERE "id" = ?
+                """, arguments: Self.args([keyless])) != nil
+            // A revisionless observation stored before the stamp joined the key sits
+            // under its former id, which covered the status and the digest only: the
+            // row is this observation when the stamp, the kind, the leg and the detail
+            // agree too; the same status at a later stamp, or with another detail, is
+            // another observation.
+            let former = derived ? event.formerKeylessDerivedID : nil
+            if !recorded, let former {
+                recorded = try Row.fetchOne(db, sql: """
+                    SELECT 1 FROM "orderEvents"
+                    WHERE "id" = ? AND "at" = ? AND "kind" = ? AND "legRef" IS ? AND "detail" IS ?
+                    """, arguments: Self.args([
+                        former, event.at.timeIntervalSince1970, event.kind, event.legRef, event.detail,
+                    ])) != nil
+            }
+            var inserted = false
+            if !recorded {
+                if let signatory {
+                    try Self.publishKeyIfNeeded(
+                        orderID: event.orderID, signatory: signatory, partyRef: event.authorRef, in: db)
+                }
+                // A fact: `INSERT OR IGNORE` stated in the statement, never a column's
+                // REPLACE clause (doc:Schema → "Primary keys"), signed over exactly the
+                // values bound here (rule 3).
+                inserted = try Self.insertSigned(
+                    table: OrderEventRow.tableName,
+                    bindings: [
+                        event.id, event.orderID, event.legRef, event.providerEventID,
+                        event.providerRevision, event.at.timeIntervalSince1970, event.kind,
+                        event.providerStatus, event.detail, event.source, event.routeDigest,
+                        event.authorRef,
+                    ],
+                    signatory: signatory, into: db)
+            }
             var statusAdvanced = false
             if event.providerStatus != nil {
                 let stored = try Row.fetchOne(db, sql: """
@@ -1251,18 +1294,40 @@ public final class AppDatabase: Sendable {
                 // arrival order and never a banner (review, PR #45 rounds 1 and 2).
                 let newObservation = inserted
                     || (observedAt ?? -.infinity) < event.at.timeIntervalSince1970
-                try db.execute(sql: """
-                    UPDATE "orderProviderStates" SET
-                      "providerStatus" = ?,
-                      "providerDetail" = ?,
-                      "providerObservedAt" = ?
-                    WHERE "orderID" = ?
-                      AND ("providerObservedAt" IS NULL OR "providerObservedAt" <= ?)
-                    """, arguments: Self.args([
-                        event.providerStatus, event.detail,
-                        event.at.timeIntervalSince1970, event.orderID,
-                        event.at.timeIntervalSince1970,
-                    ]))
+                // At an exact stamp the mirror follows the one total order the verdicts
+                // use, not arrival: among the rows at this stamp a journal row beats a
+                // claim read beats `placed`, then the feed's operation id, then the
+                // higher revision, then the smallest id — so the mirror and
+                // `mirrorIntegrity` agree on what may be the staler word rather than
+                // disagree by arrival (review, PR #48).
+                // Only status-bearing rows compete: the mirror records nothing else, and
+                // `mirrorIntegrity` ranks the same set (round 2).
+                let stamp = event.at.timeIntervalSince1970
+                var outranked = false
+                if observedAt == stamp {
+                    let peers = try Row.fetchAll(db, sql: """
+                        SELECT * FROM "orderEvents"
+                        WHERE "orderID" = ? AND "at" = ? AND "providerStatus" IS NOT NULL
+                        """, arguments: Self.args([event.orderID, stamp])).map(Self.orderEvent)
+                    let own: Set<UUID?> = [event.id, keyless, former]
+                    if let winner = peers.max(by: Self.precedes), !own.contains(winner.id) {
+                        outranked = true
+                    }
+                }
+                var changed = false
+                if !outranked {
+                    try db.execute(sql: """
+                        UPDATE "orderProviderStates" SET
+                          "providerStatus" = ?,
+                          "providerDetail" = ?,
+                          "providerObservedAt" = ?
+                        WHERE "orderID" = ?
+                          AND ("providerObservedAt" IS NULL OR "providerObservedAt" <= ?)
+                        """, arguments: Self.args([
+                            event.providerStatus, event.detail, stamp, event.orderID, stamp,
+                        ]))
+                    changed = db.changesCount > 0
+                }
                 // The WHERE gate is the freshness check — a stale event updates
                 // zero rows — and only a word that differs from the stored one
                 // counts as the status having moved. `inserted` joins the gate
@@ -1271,7 +1336,7 @@ public final class AppDatabase: Sendable {
                 // news: re-announcing it would ping-pong banners on a cursor
                 // reset (review, PR #7). A collision stamped past the mirror's own
                 // stamp is the one non-inserted case that is news (`newObservation`).
-                statusAdvanced = newObservation && db.changesCount > 0
+                statusAdvanced = newObservation && changed
                     && previous != event.providerStatus
             }
             if inserted {
@@ -1309,7 +1374,7 @@ public final class AppDatabase: Sendable {
         try events(orderID: orderID)
     }
 
-    private static func orderEvent(_ row: Row) -> OrderEvent {
+    static func orderEvent(_ row: Row) -> OrderEvent {
         OrderEvent(
             id: row["id"],
             orderID: row["orderID"],
@@ -1341,6 +1406,7 @@ public final class AppDatabase: Sendable {
     /// IGNORE` leaves the first row standing (no shared key carries a REPLACE
     /// clause since the epoch — doc:Schema → "Primary keys").
     public func postMessage(_ message: OrderMessage) throws {
+        let signatory = try? signatory()
         try queue.write { db in
             let orderExists = try Row.fetchOne(db, sql: """
                 SELECT 1 FROM "orders" WHERE "id" = ?
@@ -1359,7 +1425,7 @@ public final class AppDatabase: Sendable {
                     """, arguments: Self.args([ref, message.orderID])) != nil
                 guard sameOrder else { throw WriteError.attachmentOutsideOrder }
             }
-            try Self.insertMessage(message, into: db)
+            try Self.insertMessage(message, signatory: signatory, into: db)
         }
     }
 
@@ -1383,28 +1449,32 @@ public final class AppDatabase: Sendable {
         let message = OrderMessage(
             orderID: orderID, sentAt: sentAt, kind: OrderMessage.Kind.photo,
             text: caption, attachmentRef: attachment.id, authorHint: authorHint)
+        let signatory = try? signatory()
         try queue.write { db in
             let orderExists = try Row.fetchOne(db, sql: """
                 SELECT 1 FROM "orders" WHERE "id" = ?
                 """, arguments: Self.args([orderID])) != nil
             guard orderExists else { throw WriteError.messageHasNoOrder }
-            try db.execute(sql: """
-                INSERT OR IGNORE INTO "orderAttachments"
-                  ("id", "orderID", "kind", "caption", "byteSize",
-                   "createdAt", "authorHint", "dataHash", "authorRef",
-                   "signingKeyID", "signature")
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
-                """, arguments: Self.args([
-                    attachment.id, attachment.orderID, attachment.kind,
-                    attachment.caption, attachment.byteSize,
-                    attachment.createdAt.timeIntervalSince1970,
-                    attachment.authorHint, attachment.dataHash, attachment.authorRef,
-                ]))
+            if let signatory {
+                try Self.publishKeyIfNeeded(
+                    orderID: orderID, signatory: signatory, partyRef: attachment.authorRef, in: db)
+            }
+            // The hash is signed with the row; the blob itself is a CKAsset nobody
+            // signs, and a swapped blob fails the attachment's verdict (YD-42).
+            try Self.insertSigned(
+                table: OrderAttachmentRow.tableName,
+                bindings: [
+                    attachment.id, attachment.orderID, attachment.kind, attachment.caption,
+                    attachment.byteSize, attachment.createdAt.timeIntervalSince1970,
+                    attachment.dataHash, attachment.authorRef,
+                ],
+                signatory: signatory,
+                unsigned: [("authorHint", attachment.authorHint)], into: db)
             try db.execute(sql: """
                 INSERT OR IGNORE INTO "attachmentBlobs" ("attachmentID", "data")
                 VALUES (?, ?)
                 """, arguments: Self.args([attachment.id, data]))
-            try Self.insertMessage(message, into: db)
+            try Self.insertMessage(message, signatory: signatory, into: db)
         }
         return message
     }
@@ -1433,22 +1503,26 @@ public final class AppDatabase: Sendable {
         }
     }
 
-    private static func insertMessage(_ message: OrderMessage, into db: Database) throws {
-        try db.execute(sql: """
-            INSERT OR IGNORE INTO "orderMessages"
-              ("id", "orderID", "sentAt", "kind", "text",
-               "attachmentRef", "authorHint", "authorRef",
-               "signingKeyID", "signature")
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
-            """, arguments: Self.args([
-                message.id, message.orderID,
-                message.sentAt.timeIntervalSince1970, message.kind,
-                message.text, message.attachmentRef, message.authorHint,
-                message.authorRef,
-            ]))
+    /// The message row, signed over exactly what it binds; `authorHint` rides beside
+    /// the signed list as the display cache it is (the trust layer's rule 3).
+    private static func insertMessage(
+        _ message: OrderMessage, signatory: Signatory?, into db: Database
+    ) throws {
+        if let signatory {
+            try publishKeyIfNeeded(
+                orderID: message.orderID, signatory: signatory, partyRef: message.authorRef, in: db)
+        }
+        try insertSigned(
+            table: OrderMessageRow.tableName,
+            bindings: [
+                message.id, message.orderID, message.sentAt.timeIntervalSince1970, message.kind,
+                message.text, message.attachmentRef, message.authorRef,
+            ],
+            signatory: signatory,
+            unsigned: [("authorHint", message.authorHint)], into: db)
     }
 
-    private static func orderMessage(_ row: Row) -> OrderMessage {
+    static func orderMessage(_ row: Row) -> OrderMessage {
         OrderMessage(
             id: row["id"],
             orderID: row["orderID"],
