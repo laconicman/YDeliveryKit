@@ -158,7 +158,9 @@ extension AppDatabase {
     /// every later assignment collide with the first and vanish, and a retry of one
     /// assignment passes the same id so `INSERT OR IGNORE` recognises it. The effective
     /// role is the latest row; earlier rows stay as the role's history. Throws when the
-    /// key cannot be reached: an unsigned assignment would count for nothing.
+    /// key cannot be reached: an unsigned assignment would count for nothing. Returns
+    /// the row as stored — on a retry, the original with its own stamp and signature,
+    /// not this call's copy (review, PR #47).
     @discardableResult
     public func setMembershipRole(
         orderID: Order.ID, partyRef: UUID, role: String, id: UUID = UUID(),
@@ -166,11 +168,20 @@ extension AppDatabase {
     ) throws -> Membership {
         let signatory = try signatory()
         let row = Membership(id: id, orderID: orderID, partyRef: partyRef, role: role, addedAt: now, authorRef: localParty)
-        try queue.write { db in
+        return try queue.write { db in
             try Self.publishKeyIfNeeded(orderID: orderID, signatory: signatory, partyRef: localParty, in: db)
             try Self.insertSigned(table: MembershipRow.tableName, bindings: row.signedBindings,
                                   signatory: signatory, into: db)
+            guard let stored = try Self.membership(id: id, in: db) else {
+                preconditionFailure("the assignment row exists after INSERT OR IGNORE")
+            }
+            return stored
         }
-        return row
+    }
+
+    private static func membership(id: UUID, in db: Database) throws -> Membership? {
+        try Row.fetchOne(db, sql: """
+            SELECT * FROM "memberships" WHERE "id" = ?
+            """, arguments: args([id])).map(membership)
     }
 }

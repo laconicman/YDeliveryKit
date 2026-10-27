@@ -227,11 +227,14 @@ struct TrustRowsTests {
         let assigned = try database.setMembershipRole(
             orderID: order.id, partyRef: party("_irina"), role: Membership.Role.receiver, id: assignment,
             localParty: me, at: t0 + 10)
-        try database.setMembershipRole(
+        let retried = try database.setMembershipRole(
             orderID: order.id, partyRef: party("_irina"), role: Membership.Role.receiver, id: assignment,
             localParty: me, at: t0 + 11)
         let rows = try database.memberships(orderID: order.id)
         #expect(rows.count == 2 && rows.contains { $0.id == assigned.id }, "a retry of one assignment is one row")
+        #expect(assigned.signature != nil && assigned.signingKeyID != nil, "the returned row is the stored, signed one")
+        #expect(retried == assigned && retried.addedAt == t0 + 10,
+                "a retry returns the row that exists, with its own stamp, not this call's copy")
         #expect(Membership.effective(among: rows)?.role == Membership.Role.receiver)
         try database.reconcileMemberships(orderID: order.id, authority: authority, at: t0 + 20)
         #expect(try database.memberships(orderID: order.id).count == 2, "a live row needs no mirror")
