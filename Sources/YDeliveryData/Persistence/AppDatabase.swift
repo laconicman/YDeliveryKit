@@ -1224,7 +1224,8 @@ public final class AppDatabase: Sendable {
         // devices recording one fact write two rows rather than one merged record; a
         // caller-held id stays the caller's.
         let keyless = event.keylessDerivedID
-        if let signatory, event.id == keyless {
+        let derived = event.id == keyless
+        if let signatory, derived {
             event.id = OrderEvent.derivedID(
                 orderID: event.orderID, providerEventID: event.providerEventID,
                 providerRevision: event.providerRevision,
@@ -1236,17 +1237,25 @@ public final class AppDatabase: Sendable {
             // write custody failed to sign — is this fact: a signed replay adds no
             // second row and is no news; the row stays as it is, never re-signed
             // (review, PR #48).
-            var recorded = try event.id != keyless && Row.fetchOne(db, sql: """
+            // Both probes concern a derived identity: a caller-held id is the caller's
+            // fact, whatever the derivation would say, and its own `INSERT OR IGNORE`
+            // is its replay check (round 3).
+            var recorded = try derived && event.id != keyless && Row.fetchOne(db, sql: """
                 SELECT 1 FROM "orderEvents" WHERE "id" = ?
                 """, arguments: Self.args([keyless])) != nil
             // A revisionless observation stored before the stamp joined the key sits
-            // under its former id with this very stamp; the same status at a later
-            // stamp under that id is an earlier observation, and this one is new.
-            let former = event.formerKeylessDerivedID
+            // under its former id, which covered the status and the digest only: the
+            // row is this observation when the stamp, the kind, the leg and the detail
+            // agree too; the same status at a later stamp, or with another detail, is
+            // another observation.
+            let former = derived ? event.formerKeylessDerivedID : nil
             if !recorded, let former {
                 recorded = try Row.fetchOne(db, sql: """
-                    SELECT 1 FROM "orderEvents" WHERE "id" = ? AND "at" = ?
-                    """, arguments: Self.args([former, event.at.timeIntervalSince1970])) != nil
+                    SELECT 1 FROM "orderEvents"
+                    WHERE "id" = ? AND "at" = ? AND "kind" = ? AND "legRef" IS ? AND "detail" IS ?
+                    """, arguments: Self.args([
+                        former, event.at.timeIntervalSince1970, event.kind, event.legRef, event.detail,
+                    ])) != nil
             }
             var inserted = false
             if !recorded {

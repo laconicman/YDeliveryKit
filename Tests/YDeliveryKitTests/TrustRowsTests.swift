@@ -280,6 +280,32 @@ struct TrustRowsTests {
                 == MembershipReconciliation(mirrored: 0, removed: 0))
     }
 
+    @Test("Restored write permission brings back the role the owner's rows last gave, participant only where there was none")
+    func permissionRestorationRestoresTheAssignedRole() throws {
+        let database = makeDatabase()
+        let order = try recordOrder(in: database)
+        let me = party("_me"), irina = party("_irina"), sergei = party("_sergei")
+        var authority = FakeAuthority(
+            localParty: me, owner: me, participants: [member("_irina"), member("_sergei", canWrite: false)],
+            myKeyID: try database.signatory().keyID)
+        let t0 = Date(timeIntervalSince1970: 1_000)
+        try database.reconcileMemberships(orderID: order.id, authority: authority, at: t0)
+        try database.setMembershipRole(orderID: order.id, partyRef: irina, role: Membership.Role.receiver,
+                                       localParty: me, at: t0 + 5)
+        func role(of party: UUID) throws -> String? {
+            Membership.effective(among: try database.memberships(orderID: order.id).filter { $0.partyRef == party })?.role
+        }
+        authority.participants = [member("_irina", canWrite: false), member("_sergei", canWrite: false)]
+        try database.reconcileMemberships(orderID: order.id, authority: authority, at: t0 + 10)
+        #expect(try role(of: irina) == Membership.Role.reader, "read-only: a reader, whatever she was")
+        authority.participants = [member("_irina"), member("_sergei")]
+        #expect(try database.reconcileMemberships(orderID: order.id, authority: authority, at: t0 + 20)
+                == MembershipReconciliation(mirrored: 2, removed: 0))
+        #expect(try role(of: irina) == Membership.Role.receiver, "the receiver is a receiver again")
+        #expect(try role(of: sergei) == Membership.Role.participant,
+                "a reader from admission who may write now is a participant, as on admission")
+    }
+
     @Test("A role assignment is a caller-held row; a retry under the same id is one row; the next reconcile leaves it alone")
     func roleAssignment() throws {
         let database = makeDatabase()

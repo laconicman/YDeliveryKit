@@ -99,7 +99,8 @@ mirror itself follows that order at an equal stamp, so the two agree. A revision
 sighting keys on its own stamp; a signed replay of a fact already recorded unsigned adds
 no row. The share's list is the trigger and the owner's signed rows are the dates: the
 reconcile mirrors the share's permission too — a `reader` row for a participant it lists
-read-only, a new row per change under the next revision of the admission — and the party
+read-only, a new row per change under the next revision of the admission, a restored
+permission bringing back the role the rows last gave — and the party
 book places a party only when the list and the rows agree on their standing, the
 effective row as of the stamp then naming the role; a disagreement (a departure, a
 permission change, a return the owner's device has not mirrored) places nobody until it

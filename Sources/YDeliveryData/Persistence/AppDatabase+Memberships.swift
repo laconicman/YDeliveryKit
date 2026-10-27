@@ -137,21 +137,31 @@ extension AppDatabase {
                 let party = member.ref
                 let own = counting.filter { $0.partyRef == party }
                 let effective = Membership.effective(among: own)
-                let wanted = member.canWrite ? Membership.Role.participant : Membership.Role.reader
+                let wantedStanding = member.canWrite ? Membership.Role.participant : Membership.Role.reader
                 let removals = own.filter { $0.role == Membership.Role.removed }
+                var role = wantedStanding
                 var revision = 0
                 if let effective, effective.role != Membership.Role.removed {
                     // Admitted already: a row is due only when the share's permission and
                     // the row's standing differ; the revision counts this admission's rows.
-                    guard Membership.standing(of: effective.role) != wanted else { continue }
+                    guard Membership.standing(of: effective.role) != wantedStanding else { continue }
                     let since = removals.map(\.addedAt).max()
-                    revision = own.filter { row in since.map { row.addedAt > $0 } ?? true }.count
+                    let admission = own.filter { row in since.map { row.addedAt > $0 } ?? true }
+                    revision = admission.count
+                    if member.canWrite {
+                        // Write permission restored: the role the owner's rows last gave the
+                        // party in this admission comes back — a receiver is a receiver again —
+                        // and `participant` only where there was none, as on admission; the
+                        // share's permission grants no more than that (review, PR #48).
+                        role = Membership.effective(among: admission.filter { $0.role != Membership.Role.reader })?.role
+                            ?? Membership.Role.participant
+                    }
                 }
                 let row = Membership(
                     id: Membership.mirroredID(
                         orderID: orderID, partyRef: party, writerKeyID: signatory.keyID,
                         generation: removals.count, revision: revision),
-                    orderID: orderID, partyRef: party, role: wanted,
+                    orderID: orderID, partyRef: party, role: role,
                     addedAt: now, authorRef: localParty)
                 if try Self.insertSigned(table: MembershipRow.tableName, bindings: row.signedBindings,
                                          signatory: signatory, into: db) {

@@ -503,6 +503,17 @@ struct SignedFactsTests {
         #expect(try database.events(orderID: order.id).count == 1)
         #expect(try database.recordEvent(revisionless(at: 1_300)).inserted, "a later observation is new")
         #expect(try database.events(orderID: order.id).count == 2)
+        // The former id covered the status and the digest only: a caller-held event, or
+        // another kind or detail at the same stamp and status, is another fact.
+        var held = revisionless(at: 1_100)
+        held.id = UUID()
+        held.kind = OrderEvent.Kind.statusChanged
+        held.detail = "by hand"
+        #expect(try database.recordEvent(held).inserted, "a caller-held id is the caller's fact")
+        var detailed = revisionless(at: 1_100)
+        detailed.detail = "courier called"
+        #expect(try database.recordEvent(detailed).inserted, "another detail is another observation")
+        #expect(try database.events(orderID: order.id).count == 4)
     }
 
     @Test("A member the share no longer lists verifies nothing until the departure is dated; then what they wrote as a member comes back")
