@@ -155,13 +155,30 @@ public struct Member: Hashable, Sendable {
     public var role: String?
     public var canWrite: Bool
     public var displayName: String?
+    /// The share's owner — the party that writes the order and its memberships.
+    public var isOwner: Bool
 
-    public init(ref: UUID, role: String? = nil, canWrite: Bool, displayName: String? = nil) {
+    public init(ref: UUID, role: String? = nil, canWrite: Bool, displayName: String? = nil,
+                isOwner: Bool = false) {
         self.ref = ref
         self.role = role
         self.canWrite = canWrite
         self.displayName = displayName
+        self.isOwner = isOwner
     }
+}
+
+/// Who owns an order, as the authority answers it.
+public enum Ownership: Hashable, Sendable {
+    /// A private order: this device is its owner.
+    case local
+    /// A shared order whose owner the authority resolved to a party.
+    case party(UUID)
+    /// A shared order whose owner cannot be resolved yet — the share names the owner
+    /// by the current-user placeholder and this device does not know itself. Nobody is
+    /// the owner for trust purposes until it does: no row counts for a role, and the
+    /// reconcile writes nothing (review, PR #47).
+    case unresolved
 }
 
 /// The seam that keeps CloudKit out of the rows (rule 8): `CKCurrentUserDefaultName`,
@@ -171,5 +188,6 @@ public protocol IdentityAuthority: Sendable {
     /// The party this device is, once the authority has told it.
     var localParty: UUID? { get }
     func binding(of key: ParticipantKey) -> KeyBinding
+    func owner(of orderID: Order.ID) -> Ownership
     func members(of orderID: Order.ID) -> [Member]
 }
