@@ -155,12 +155,16 @@ public struct Member: Hashable, Sendable {
     public var role: String?
     public var canWrite: Bool
     public var displayName: String?
+    /// The share's owner — the party that writes the order and its memberships.
+    public var isOwner: Bool
 
-    public init(ref: UUID, role: String? = nil, canWrite: Bool, displayName: String? = nil) {
+    public init(ref: UUID, role: String? = nil, canWrite: Bool, displayName: String? = nil,
+                isOwner: Bool = false) {
         self.ref = ref
         self.role = role
         self.canWrite = canWrite
         self.displayName = displayName
+        self.isOwner = isOwner
     }
 }
 

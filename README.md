@@ -73,7 +73,19 @@ implementation yet. The Keychain item lives here and not in the app by the membe
 test: the extension targets write too (a photo posted from the share extension must sign
 with the same device key), and the key is resolved once per process, outside any write
 transaction, so a slow Keychain never holds the SQLite lock across a suspension. Nothing
-signs in this version: the writers and the verdicts land next, each as its own patch.
+signs in 0.5.1: the writers and the verdicts land as their own patches.
+
+Key rows and memberships (0.5.2; the app's `Schema` → "Stage 1", `Collaboration` →
+"Keys"): a device publishes its key into an order as a self-signed `participantKeys` row
+under `orderID ‖ keyID ‖ bindingKind`, inside the first signed write; `memberships` mirrors
+the share — a signed `participant` row per accepted participant under
+`orderID ‖ partyRef ‖ keyID ‖ generation`, a `removed` row when the share no longer lists a
+party, a caller-held row per role assignment — and the row in force is selected at read
+(latest `addedAt`; on a tie `removed` dominates, then the smallest id), as of the row being
+judged. `CloudKitIdentityAuthority` is the one place CloudKit vocabulary reaches the trust
+layer: it resolves a key row's creator stamp to a party and lists an order's members from
+the cached share merged with the rows. `Entitlement.mayWrite` is the matrix. The signed
+facts and the verdicts land next.
 
 One consumer-facing honesty note: the substrate never destroys bytes. A malformed
 legacy file is rescued aside as `*.corrupted-<t>-<id>.json` before the store opens;

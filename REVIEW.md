@@ -30,7 +30,17 @@ the diff-level cues and the noise filters.
   values beside the model (`Attested`), never fields on it (rule 5).
 - Flag a CloudKit type above the identity authority adapter, a Keychain item with
   `kSecAttrSynchronizable` true or without an explicit accessibility, and a key store
-  that caches a failure: only a resolved key is cached (rules 4 and 8).
+  that caches a failure: only a resolved key is cached (rules 4 and 8). The adapter is
+  `CloudKitIdentityAuthority.swift`; with `Sharing.swift` it is the only file in
+  `YDeliveryData` that imports CloudKit.
+- Flag a role or a name column on `participantKeys`: roles come from `memberships` and
+  `legs`, never from a writer's claim, and names from the authority at render time.
+- Flag a membership `UPDATE` or `DELETE`, or a role assignment under a derived id: a
+  role change is a new row under a caller-held id, a removal a `removed` row, and the
+  row in force is selected at read (`Membership.effective`).
+- Flag a `SyncMetadata` read inside a write transaction, or one that does not go through
+  `withMetadatabase`: the metadatabase attaches when the engine is constructed, and a
+  Keychain or metadata read must never hold the SQLite write lock.
 - Flag `ON CONFLICT REPLACE` on any shared-tier primary key, and a bare `INSERT` on a
   fact table (`orderEvents`, `orderMessages`, `orderAttachments`, `participantKeys`,
   `memberships`, `orderRatings`) that does not state its policy — `INSERT OR IGNORE`

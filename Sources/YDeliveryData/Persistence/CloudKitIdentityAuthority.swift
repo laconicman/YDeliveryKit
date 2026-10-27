@@ -1,0 +1,114 @@
+import CloudKit
+import Foundation
+import GRDB
+import SQLiteData
+
+/// The CloudKit implementation of ``IdentityAuthority`` — with `Sharing.swift`, the
+/// only file in the data target that speaks CloudKit (rule 8). It answers one
+/// question per key row, *which party does your binding name?*, from the creator
+/// stamp CloudKit put on the record and sqlite-data cached in the sync metadata —
+/// a trust anchor nobody in a share can forge — and lists an order's members from
+/// the root record's cached `CKShare`, merged with the order's membership rows.
+/// Nothing above this type sees a record name, a `CKShare` participant or the
+/// current-user placeholder; rows carry `partyRef`, models carry `Party`.
+public struct CloudKitIdentityAuthority: IdentityAuthority {
+    /// The authority word in every `partyRef` derivation and `localIdentity` key.
+    public static let authorityKind = "cloudkit"
+
+    private let database: AppDatabase
+    private let containerIdentifier: String
+
+    public init(database: AppDatabase, containerIdentifier: String) {
+        self.database = database
+        self.containerIdentifier = containerIdentifier
+    }
+
+    /// The `localIdentity` row's key for a container: `cloudkit:<container>`.
+    public static func authorityKey(containerIdentifier: String) -> String {
+        "\(authorityKind):\(containerIdentifier)"
+    }
+
+    /// The party this device is, once the app has noted the container's user record
+    /// name into `localIdentity`; `nil` until then.
+    public var localParty: UUID? {
+        (try? database.localIdentity(
+            authority: Self.authorityKey(containerIdentifier: containerIdentifier)))?.partyRef
+    }
+
+    public func binding(of key: ParticipantKey) -> KeyBinding {
+        let stamp = (try? database.creatorRecordName(
+            recordPrimaryKey: key.id.uuidString.lowercased(),
+            recordType: ParticipantKeyRow.tableName)) ?? nil
+        let mine = (try? database.signatory().keyID) == key.keyID
+        return PartyResolution.binding(
+            stampRecordName: stamp, claimedPartyRef: key.partyRef, isMine: mine, localParty: localParty)
+    }
+
+    public func members(of orderID: Order.ID) -> [Member] {
+        let share = (try? database.share(of: orderID)) ?? nil
+        let rows = (try? database.memberships(orderID: orderID)) ?? []
+        return MemberList.merge(summary: share.map(ShareSummary.init), memberships: rows)
+    }
+}
+
+extension ShareSummary {
+    /// The share reduced to values. Names come only when the person consented to
+    /// disclose them (`CKUserIdentity.nameComponents`), formatted the way the rest of
+    /// the Kit formats a person: through the components formatter, never hand-joined.
+    init(share: CKShare) {
+        let formatter = PersonNameComponentsFormatter()
+        func name(of participant: CKShare.Participant) -> String? {
+            guard let components = participant.userIdentity.nameComponents else { return nil }
+            let formatted = formatter.string(from: components)
+            return formatted.isEmpty ? nil : formatted
+        }
+        ownerRecordName = share.owner.userIdentity.userRecordID?.recordName
+        ownerName = name(of: share.owner)
+        participants = share.participants
+            .filter { $0.role != .owner }
+            .map { participant in
+                Participant(
+                    recordName: participant.userIdentity.userRecordID?.recordName,
+                    displayName: name(of: participant),
+                    accepted: participant.acceptanceStatus == .accepted,
+                    canWrite: participant.permission == .readWrite)
+            }
+    }
+}
+
+extension AppDatabase {
+    /// A read with the engine's metadatabase attached: constructing the engine is what
+    /// attaches it, so the engine is asked for first — outside any write transaction,
+    /// never inside one (the parked branch's `_ = try? syncEngine` inside a write was
+    /// the trap).
+    func withMetadatabase<T>(_ read: (Database) throws -> T) throws -> T {
+        _ = try syncEngine
+        return try queue.read(read)
+    }
+
+    /// The record name CloudKit stamped as the creator of one synced row, from the
+    /// sync metadata's cached server record; `nil` before the row has been to the
+    /// server. On the current user's own records this is the current-user
+    /// placeholder, which ``PartyResolution`` resolves to the local party.
+    func creatorRecordName(recordPrimaryKey: String, recordType: String) throws -> String? {
+        try withMetadatabase { db in
+            let record = try SyncMetadata
+                .where { $0.recordPrimaryKey.eq(recordPrimaryKey) && $0.recordType.eq(recordType) }
+                .select(\.lastKnownServerRecord)
+                .fetchOne(db) ?? nil
+            return record?.creatorUserRecordID?.recordName
+        }
+    }
+
+    /// The order's cached `CKShare`, present on the owner's and every participant's
+    /// device once the root has been shared or the share accepted; `nil` for a
+    /// private order.
+    func share(of orderID: Order.ID) throws -> CKShare? {
+        try withMetadatabase { db in
+            try SyncMetadata
+                .find(OrderRow(id: orderID, provider: provider).syncMetadataID)
+                .select(\.share)
+                .fetchOne(db) ?? nil
+        }
+    }
+}
