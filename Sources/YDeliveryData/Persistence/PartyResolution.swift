@@ -18,6 +18,22 @@ enum PartyResolution {
         return UUID.partyRef(authority: CloudKitIdentityAuthority.authorityKind, subject: recordName)
     }
 
+    /// Who owns an order, from the one fact that is there before any share is cached:
+    /// the owner of the zone the root record lives in (the app's Collaboration →
+    /// "Verdicts and entitlement", role resolution). A root that never synced is
+    /// local — nothing of anyone else's can be there. A zone owned by another record
+    /// name is theirs, share cached or not; our own zone is private without a share,
+    /// and with one the share's owner resolves like any record name — the placeholder
+    /// is this device, unresolved while it does not know itself (review, PR #47).
+    static func ownership(zoneOwnerName: String?, share: ShareSummary?, localParty: UUID?) -> Ownership {
+        guard let zoneOwnerName else { return .local }
+        guard zoneOwnerName == currentUserDefaultName else {
+            return .party(UUID.partyRef(authority: CloudKitIdentityAuthority.authorityKind, subject: zoneOwnerName))
+        }
+        guard let share else { return .local }
+        return share.ownerRef(localParty: localParty).map(Ownership.party) ?? .unresolved
+    }
+
     /// Which party a key row's binding names (the app's Collaboration → "Keys" →
     /// *Trust*): the creator stamp resolves to a party — a real record name, or the
     /// current-user placeholder on a device whose own party is known; the row's own

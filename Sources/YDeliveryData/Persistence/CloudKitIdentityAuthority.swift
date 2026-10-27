@@ -44,12 +44,16 @@ public struct CloudKitIdentityAuthority: IdentityAuthority {
             stampRecordName: stamp, claimedPartyRef: key.partyRef, isMine: mine, localParty: localParty)
     }
 
-    /// A private order is this device's; a shared order's owner is the share's,
-    /// resolved like any record name — the placeholder is the local party — and
-    /// unresolved while the device does not know itself.
+    /// Ownership from the zone the root record lives in, then the share: a root that
+    /// never synced is this device's; a zone owned by another record name is theirs,
+    /// share cached or not; our own zone is private without a share and, with one, the
+    /// share's owner resolved like any record name — unresolved while the device does
+    /// not know itself.
     public func owner(of orderID: Order.ID) -> Ownership {
-        guard let share = (try? database.share(of: orderID)) ?? nil else { return .local }
-        return ShareSummary(share: share).ownerRef(localParty: localParty).map(Ownership.party) ?? .unresolved
+        let root = (try? database.rootZone(of: orderID)) ?? nil
+        return PartyResolution.ownership(
+            zoneOwnerName: root?.ownerName, share: root?.share.map(ShareSummary.init),
+            localParty: localParty)
     }
 
     /// The share's owner and accepted participants, with roles from the membership
@@ -119,11 +123,17 @@ extension AppDatabase {
     /// device once the root has been shared or the share accepted; `nil` for a
     /// private order.
     func share(of orderID: Order.ID) throws -> CKShare? {
+        try rootZone(of: orderID)?.share
+    }
+
+    /// The zone the order's root record lives in — its owner's record name, the
+    /// current-user placeholder for our own zone — and the cached share, when any;
+    /// `nil` for a root that never synced.
+    func rootZone(of orderID: Order.ID) throws -> (ownerName: String, share: CKShare?)? {
         try withMetadatabase { db in
-            try SyncMetadata
-                .find(OrderRow(id: orderID, provider: provider).syncMetadataID)
-                .select(\.share)
-                .fetchOne(db) ?? nil
+            let root = SyncMetadata.find(OrderRow(id: orderID, provider: provider).syncMetadataID)
+            guard let ownerName = try root.select(\.ownerName).fetchOne(db) else { return nil }
+            return (ownerName, try root.select(\.share).fetchOne(db) ?? nil)
         }
     }
 }

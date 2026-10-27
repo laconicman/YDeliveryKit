@@ -145,6 +145,24 @@ struct TrustRowsTests {
         #expect(PartyResolution.party(forRecordName: "_them", localParty: nil) == them)
     }
 
+    @Test("Ownership comes from the zone first and the share second")
+    func ownershipResolution() {
+        let me = party("_me")
+        let placeholder = PartyResolution.currentUserDefaultName
+        let shared = ShareSummary(ownerRecordName: placeholder, ownerName: nil, participants: [])
+        #expect(PartyResolution.ownership(zoneOwnerName: nil, share: nil, localParty: me) == .local,
+                "a root that never synced is this device's")
+        #expect(PartyResolution.ownership(zoneOwnerName: "_them", share: nil, localParty: me) == .party(party("_them")),
+                "another record name's zone is theirs, share cached or not")
+        #expect(PartyResolution.ownership(zoneOwnerName: "_them", share: shared, localParty: me) == .party(party("_them")))
+        #expect(PartyResolution.ownership(zoneOwnerName: placeholder, share: nil, localParty: me) == .local,
+                "our zone without a share: a private order")
+        #expect(PartyResolution.ownership(zoneOwnerName: placeholder, share: shared, localParty: me) == .party(me),
+                "our zone with a share: we are its owner")
+        #expect(PartyResolution.ownership(zoneOwnerName: placeholder, share: shared, localParty: nil) == .unresolved,
+                "until the device knows itself, nobody is")
+    }
+
     // MARK: Memberships
 
     @Test("The effective row is the latest; removed dominates an exact tie, then the smallest id; as of a stamp")
