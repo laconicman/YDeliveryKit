@@ -84,8 +84,18 @@ party, a caller-held row per role assignment — and the row in force is selecte
 (latest `addedAt`; on a tie `removed` dominates, then the smallest id), as of the row being
 judged. `CloudKitIdentityAuthority` is the one place CloudKit vocabulary reaches the trust
 layer: it resolves a key row's creator stamp to a party and lists an order's members from
-the cached share merged with the rows. `Entitlement.mayWrite` is the matrix. The signed
-facts and the verdicts land next.
+the cached share merged with the rows. `Entitlement.mayWrite` is the matrix.
+
+Signed facts and the verdicts (0.5.3): `recordEvent`, `postMessage` and `postPhotoMessage`
+sign exactly the values they bind, in the same statement, with the device's key published
+into the order in the same transaction; a derived event id is re-derived under the
+writer's key, so two devices recording one fact write two rows. The attested reads —
+`attestedEvents`, `attestedMessages`, `attestedAttachment` — hand back `Attested` values
+with a verdict each, computed from the stored row and the key row its `signingKeyID`
+names, the key's binding resolved through the authority, entitlement judged as of the
+row's stamp; events are deduped by fact at read. `mirrorIntegrity` and `routeIntegrity`
+check the projections against the latest verified fact under one total order. The
+unattested reads stay for callers that render no verdict.
 
 One consumer-facing honesty note: the substrate never destroys bytes. A malformed
 legacy file is rescued aside as `*.corrupted-<t>-<id>.json` before the store opens;

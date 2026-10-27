@@ -11,11 +11,14 @@ extension AppDatabase {
     /// *unsigned*, which is the truth. The signatory is resolved by the caller before
     /// the transaction, never inside it.
     ///
-    /// Returns whether a row was written.
+    /// `unsigned` carries the columns the row stores but the signature does not cover —
+    /// a display cache such as `authorHint` — appended to the statement, never to the
+    /// payload. Returns whether a row was written.
     @discardableResult
     static func insertSigned(
         table: String, bindings: [(any DatabaseValueConvertible)?], signatory: Signatory?,
         keyIDColumn: String? = "signingKeyID", signatureColumn: String = "signature",
+        unsigned: [(column: String, value: (any DatabaseValueConvertible)?)] = [],
         into db: Database
     ) throws -> Bool {
         guard let columns = CanonicalPayload.signedColumns[table] else {
@@ -33,6 +36,10 @@ extension AppDatabase {
         }
         allColumns.append(signatureColumn)
         allValues.append(try signatory?.signatureBase64(for: payload).databaseValue ?? .null)
+        for (column, value) in unsigned {
+            allColumns.append(column)
+            allValues.append(CanonicalPayload.databaseValues([value])[0])
+        }
         let quoted = allColumns.map { "\"\($0)\"" }.joined(separator: ", ")
         let placeholders = allColumns.map { _ in "?" }.joined(separator: ", ")
         try db.execute(sql: """

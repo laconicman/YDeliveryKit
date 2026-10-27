@@ -1215,24 +1215,38 @@ public final class AppDatabase: Sendable {
     /// the status's own. `lastActivityAt` moves forward only.
     @discardableResult
     public func recordEvent(_ event: OrderEvent) throws -> OrderEventOutcome {
-        try queue.write { db in
+        // The key is resolved before the transaction (never inside one); a custody
+        // failure this time writes the row unsigned, which is the truth about it.
+        let signatory = try? signatory()
+        var event = event
+        // A derived id carries the writer's key (rule 1): a caller that kept the
+        // keyless derivation gets it re-derived under this device's key, so two
+        // devices recording one fact write two rows rather than one merged record; a
+        // caller-held id stays the caller's.
+        if let signatory, event.id == event.keylessDerivedID {
+            event.id = OrderEvent.derivedID(
+                orderID: event.orderID, providerEventID: event.providerEventID,
+                providerRevision: event.providerRevision,
+                providerStatus: event.providerStatus ?? event.kind,
+                routeDigest: event.routeDigest, writerKeyID: signatory.keyID)
+        }
+        return try queue.write { db in
+            if let signatory {
+                try Self.publishKeyIfNeeded(
+                    orderID: event.orderID, signatory: signatory, partyRef: event.authorRef, in: db)
+            }
             // A fact: `INSERT OR IGNORE` stated in the statement, never a column's
-            // REPLACE clause (doc:Schema → "Primary keys"). The signing triple is
-            // written NULL until the trust layer signs what it binds.
-            try db.execute(sql: """
-                INSERT OR IGNORE INTO "orderEvents"
-                  ("id", "orderID", "legRef", "providerEventID", "providerRevision",
-                   "at", "kind", "providerStatus", "detail", "source", "routeDigest",
-                   "authorRef", "signingKeyID", "signature")
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
-                """, arguments: Self.args([
+            // REPLACE clause (doc:Schema → "Primary keys"), signed over exactly the
+            // values bound here (rule 3).
+            let inserted = try Self.insertSigned(
+                table: OrderEventRow.tableName,
+                bindings: [
                     event.id, event.orderID, event.legRef, event.providerEventID,
-                    event.providerRevision,
-                    event.at.timeIntervalSince1970, event.kind,
-                    event.providerStatus, event.detail, event.source,
-                    event.routeDigest, event.authorRef,
-                ]))
-            let inserted = db.changesCount > 0
+                    event.providerRevision, event.at.timeIntervalSince1970, event.kind,
+                    event.providerStatus, event.detail, event.source, event.routeDigest,
+                    event.authorRef,
+                ],
+                signatory: signatory, into: db)
             var statusAdvanced = false
             if event.providerStatus != nil {
                 let stored = try Row.fetchOne(db, sql: """
@@ -1309,7 +1323,7 @@ public final class AppDatabase: Sendable {
         try events(orderID: orderID)
     }
 
-    private static func orderEvent(_ row: Row) -> OrderEvent {
+    static func orderEvent(_ row: Row) -> OrderEvent {
         OrderEvent(
             id: row["id"],
             orderID: row["orderID"],
@@ -1341,6 +1355,7 @@ public final class AppDatabase: Sendable {
     /// IGNORE` leaves the first row standing (no shared key carries a REPLACE
     /// clause since the epoch — doc:Schema → "Primary keys").
     public func postMessage(_ message: OrderMessage) throws {
+        let signatory = try? signatory()
         try queue.write { db in
             let orderExists = try Row.fetchOne(db, sql: """
                 SELECT 1 FROM "orders" WHERE "id" = ?
@@ -1359,7 +1374,7 @@ public final class AppDatabase: Sendable {
                     """, arguments: Self.args([ref, message.orderID])) != nil
                 guard sameOrder else { throw WriteError.attachmentOutsideOrder }
             }
-            try Self.insertMessage(message, into: db)
+            try Self.insertMessage(message, signatory: signatory, into: db)
         }
     }
 
@@ -1383,28 +1398,32 @@ public final class AppDatabase: Sendable {
         let message = OrderMessage(
             orderID: orderID, sentAt: sentAt, kind: OrderMessage.Kind.photo,
             text: caption, attachmentRef: attachment.id, authorHint: authorHint)
+        let signatory = try? signatory()
         try queue.write { db in
             let orderExists = try Row.fetchOne(db, sql: """
                 SELECT 1 FROM "orders" WHERE "id" = ?
                 """, arguments: Self.args([orderID])) != nil
             guard orderExists else { throw WriteError.messageHasNoOrder }
-            try db.execute(sql: """
-                INSERT OR IGNORE INTO "orderAttachments"
-                  ("id", "orderID", "kind", "caption", "byteSize",
-                   "createdAt", "authorHint", "dataHash", "authorRef",
-                   "signingKeyID", "signature")
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
-                """, arguments: Self.args([
-                    attachment.id, attachment.orderID, attachment.kind,
-                    attachment.caption, attachment.byteSize,
-                    attachment.createdAt.timeIntervalSince1970,
-                    attachment.authorHint, attachment.dataHash, attachment.authorRef,
-                ]))
+            if let signatory {
+                try Self.publishKeyIfNeeded(
+                    orderID: orderID, signatory: signatory, partyRef: attachment.authorRef, in: db)
+            }
+            // The hash is signed with the row; the blob itself is a CKAsset nobody
+            // signs, and a swapped blob fails the attachment's verdict (YD-42).
+            try Self.insertSigned(
+                table: OrderAttachmentRow.tableName,
+                bindings: [
+                    attachment.id, attachment.orderID, attachment.kind, attachment.caption,
+                    attachment.byteSize, attachment.createdAt.timeIntervalSince1970,
+                    attachment.dataHash, attachment.authorRef,
+                ],
+                signatory: signatory,
+                unsigned: [("authorHint", attachment.authorHint)], into: db)
             try db.execute(sql: """
                 INSERT OR IGNORE INTO "attachmentBlobs" ("attachmentID", "data")
                 VALUES (?, ?)
                 """, arguments: Self.args([attachment.id, data]))
-            try Self.insertMessage(message, into: db)
+            try Self.insertMessage(message, signatory: signatory, into: db)
         }
         return message
     }
@@ -1433,22 +1452,26 @@ public final class AppDatabase: Sendable {
         }
     }
 
-    private static func insertMessage(_ message: OrderMessage, into db: Database) throws {
-        try db.execute(sql: """
-            INSERT OR IGNORE INTO "orderMessages"
-              ("id", "orderID", "sentAt", "kind", "text",
-               "attachmentRef", "authorHint", "authorRef",
-               "signingKeyID", "signature")
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
-            """, arguments: Self.args([
-                message.id, message.orderID,
-                message.sentAt.timeIntervalSince1970, message.kind,
-                message.text, message.attachmentRef, message.authorHint,
-                message.authorRef,
-            ]))
+    /// The message row, signed over exactly what it binds; `authorHint` rides beside
+    /// the signed list as the display cache it is (the trust layer's rule 3).
+    private static func insertMessage(
+        _ message: OrderMessage, signatory: Signatory?, into db: Database
+    ) throws {
+        if let signatory {
+            try publishKeyIfNeeded(
+                orderID: message.orderID, signatory: signatory, partyRef: message.authorRef, in: db)
+        }
+        try insertSigned(
+            table: OrderMessageRow.tableName,
+            bindings: [
+                message.id, message.orderID, message.sentAt.timeIntervalSince1970, message.kind,
+                message.text, message.attachmentRef, message.authorRef,
+            ],
+            signatory: signatory,
+            unsigned: [("authorHint", message.authorHint)], into: db)
     }
 
-    private static func orderMessage(_ row: Row) -> OrderMessage {
+    static func orderMessage(_ row: Row) -> OrderMessage {
         OrderMessage(
             id: row["id"],
             orderID: row["orderID"],

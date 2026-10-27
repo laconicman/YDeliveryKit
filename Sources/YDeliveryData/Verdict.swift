@@ -50,6 +50,17 @@ public enum Verdict: Hashable, Sendable {
     }
 }
 
+/// What a projection's check against the signed facts yields (the app's Schema →
+/// "Derived integrity"): the mirror's status against the latest verified
+/// status-bearing event, the stored route against the latest verified digest.
+public enum IntegrityVerdict: Hashable, Sendable {
+    case consistent
+    /// The projection differs from the one expected value the signed history names.
+    case disagrees(expected: String)
+    /// No verified event carries the fact to check against.
+    case noSignedHistory
+}
+
 /// A value a read hands back together with the verdict on the row it came from.
 public struct Attested<Value: Sendable>: Sendable {
     public var value: Value

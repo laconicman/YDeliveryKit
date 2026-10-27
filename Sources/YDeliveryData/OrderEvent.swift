@@ -120,6 +120,15 @@ public struct OrderEvent: Codable, Hashable, Identifiable, Sendable {
     /// by its operation id, a sighting by revision, status and route digest.
     /// Absent components encode as empty strings — the separator can never occur
     /// inside a component (UUIDs, integers, hex digests, status words, key ids).
+    /// The id this event would carry under the keyless derivation — what a caller
+    /// gets from the initialiser without a `writerKeyID`, and what the writer
+    /// re-derives under its own key before inserting (rule 1).
+    var keylessDerivedID: UUID {
+        Self.derivedID(
+            orderID: orderID, providerEventID: providerEventID, providerRevision: providerRevision,
+            providerStatus: providerStatus ?? kind, routeDigest: routeDigest, writerKeyID: nil)
+    }
+
     static func derivedID(
         orderID: UUID, providerEventID: Int64?, providerRevision: Int64?,
         providerStatus: String, routeDigest: String?, writerKeyID: String?
