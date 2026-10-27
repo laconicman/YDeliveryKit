@@ -44,6 +44,14 @@ public struct CloudKitIdentityAuthority: IdentityAuthority {
             stampRecordName: stamp, claimedPartyRef: key.partyRef, isMine: mine, localParty: localParty)
     }
 
+    /// A private order is this device's; a shared order's owner is the share's,
+    /// resolved like any record name — the placeholder is the local party — and
+    /// unresolved while the device does not know itself.
+    public func owner(of orderID: Order.ID) -> Ownership {
+        guard let share = (try? database.share(of: orderID)) ?? nil else { return .local }
+        return ShareSummary(share: share).ownerRef(localParty: localParty).map(Ownership.party) ?? .unresolved
+    }
+
     /// The share's owner and accepted participants, with roles from the membership
     /// rows that count: only rows signed under a key row this authority resolves to the
     /// share's owner (or to this device before any stamp, when this device is the
@@ -53,10 +61,7 @@ public struct CloudKitIdentityAuthority: IdentityAuthority {
         guard let share = (try? database.share(of: orderID)) ?? nil else { return [] }
         let summary = ShareSummary(share: share)
         let localParty = localParty
-        let ownerRef = summary.ownerRef(localParty: localParty)
-        let counting = (try? database.ownerMemberships(
-            orderID: orderID, keysTrustedBy: self, ownerRef: ownerRef,
-            isLocalOwner: ownerRef != nil && ownerRef == localParty)) ?? []
+        let counting = (try? database.ownerMemberships(orderID: orderID, authority: self)) ?? []
         return MemberList.merge(summary: summary, memberships: counting, localParty: localParty)
     }
 }

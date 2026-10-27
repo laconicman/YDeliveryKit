@@ -69,11 +69,16 @@ extension AppDatabase {
     /// changes nobody's role; the verdicts render it as *notEntitled* beside the rows
     /// that count.
     public func ownerMemberships(orderID: Order.ID, authority: any IdentityAuthority) throws -> [Membership] {
-        let members = authority.members(of: orderID)
-        let ownerRef = members.first { $0.isOwner }?.ref ?? authority.localParty
-        return try ownerMemberships(
-            orderID: orderID, keysTrustedBy: authority, ownerRef: ownerRef,
-            isLocalOwner: members.isEmpty || ownerRef == authority.localParty)
+        switch authority.owner(of: orderID) {
+        case .local:
+            try ownerMemberships(orderID: orderID, keysTrustedBy: authority,
+                                 ownerRef: authority.localParty, isLocalOwner: true)
+        case .party(let owner):
+            try ownerMemberships(orderID: orderID, keysTrustedBy: authority,
+                                 ownerRef: owner, isLocalOwner: owner == authority.localParty)
+        case .unresolved:
+            []
+        }
     }
 
     func ownerMemberships(
@@ -110,15 +115,16 @@ extension AppDatabase {
     public func reconcileMemberships(
         orderID: Order.ID, authority: any IdentityAuthority, at now: Date = Date()
     ) throws -> MembershipReconciliation {
+        // Only the share's owner mirrors it, and only once this device knows it is the
+        // owner: a private order has nobody to mirror, an unresolved owner nobody who may.
+        guard case .party(let owner) = authority.owner(of: orderID),
+              let localParty = authority.localParty, owner == localParty
+        else { return MembershipReconciliation(mirrored: 0, removed: 0) }
         let members = authority.members(of: orderID)
-        let localParty = authority.localParty
-        let ownerRef = members.first { $0.isOwner }?.ref ?? localParty
-        let isLocalOwner = members.isEmpty || ownerRef == localParty
-        guard isLocalOwner, let localParty else { return MembershipReconciliation(mirrored: 0, removed: 0) }
         let signatory = try signatory()
         let listed = Set(members.filter { !$0.isOwner }.map(\.ref))
         let counting = try ownerMemberships(
-            orderID: orderID, keysTrustedBy: authority, ownerRef: ownerRef, isLocalOwner: true)
+            orderID: orderID, keysTrustedBy: authority, ownerRef: owner, isLocalOwner: true)
         return try queue.write { db in
             try Self.publishKeyIfNeeded(orderID: orderID, signatory: signatory, partyRef: localParty, in: db)
             var outcome = MembershipReconciliation(mirrored: 0, removed: 0)

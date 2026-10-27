@@ -168,6 +168,19 @@ public struct Member: Hashable, Sendable {
     }
 }
 
+/// Who owns an order, as the authority answers it.
+public enum Ownership: Hashable, Sendable {
+    /// A private order: this device is its owner.
+    case local
+    /// A shared order whose owner the authority resolved to a party.
+    case party(UUID)
+    /// A shared order whose owner cannot be resolved yet — the share names the owner
+    /// by the current-user placeholder and this device does not know itself. Nobody is
+    /// the owner for trust purposes until it does: no row counts for a role, and the
+    /// reconcile writes nothing (review, PR #47).
+    case unresolved
+}
+
 /// The seam that keeps CloudKit out of the rows (rule 8): `CKCurrentUserDefaultName`,
 /// record names and `CKShare` participants exist only inside an implementation of
 /// this protocol. One implementation arrives with the key rows; a server's later.
@@ -175,5 +188,6 @@ public protocol IdentityAuthority: Sendable {
     /// The party this device is, once the authority has told it.
     var localParty: UUID? { get }
     func binding(of key: ParticipantKey) -> KeyBinding
+    func owner(of orderID: Order.ID) -> Ownership
     func members(of orderID: Order.ID) -> [Member]
 }

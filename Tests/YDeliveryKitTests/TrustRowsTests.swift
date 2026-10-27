@@ -53,12 +53,19 @@ struct TrustRowsTests {
         var participants: [Member] = []
         var stamps: [String: UUID] = [:]
         var myKeyID: String?
+        /// A shared order whose owner this device cannot resolve yet.
+        var ownerUnresolved = false
 
         func binding(of key: ParticipantKey) -> KeyBinding {
             if let stamped = stamps[key.keyID] {
                 return key.partyRef == nil || key.partyRef == stamped ? .party(stamped) : .conflict
             }
             return key.keyID == myKeyID ? .mine : .none
+        }
+
+        func owner(of orderID: Order.ID) -> Ownership {
+            if ownerUnresolved { return .unresolved }
+            return owner.map(Ownership.party) ?? .local
         }
 
         func members(of orderID: Order.ID) -> [Member] {
@@ -332,17 +339,33 @@ struct TrustRowsTests {
         #expect(Set(keys.map(\.keyID)).count == 2, "each device published its own key")
     }
 
-    @Test("A device that is not the owner's writes nothing")
+    @Test("A device that is not the owner's writes nothing, and an unresolved owner lets nobody's rows count")
     func participantDeviceWritesNothing() throws {
         let database = makeDatabase()
         let order = try recordOrder(in: database)
         let irina = party("_irina")
-        let authority = FakeAuthority(
+        var authority = FakeAuthority(
             localParty: irina, owner: party("_me"), participants: [member("_irina")],
             myKeyID: try database.signatory().keyID)
         #expect(try database.reconcileMemberships(orderID: order.id, authority: authority)
                 == MembershipReconciliation(mirrored: 0, removed: 0))
         #expect(try database.memberships(orderID: order.id).isEmpty)
+
+        // Irina signs herself a role on an order whose owner this device cannot resolve:
+        // the fallback that once made the local party the owner is gone (review, PR #47).
+        let forged = Membership(orderID: order.id, partyRef: irina, role: Membership.Role.dispatcher, authorRef: irina)
+        let key = try database.signatory()
+        try database.queue.write { db in
+            try AppDatabase.publishKeyIfNeeded(orderID: order.id, signatory: key, partyRef: irina, in: db)
+            try AppDatabase.insertSigned(table: MembershipRow.tableName, bindings: forged.signedBindings,
+                                         signatory: key, into: db)
+        }
+        authority.owner = nil
+        authority.ownerUnresolved = true
+        #expect(try database.ownerMemberships(orderID: order.id, authority: authority).isEmpty,
+                "nobody is the owner until the device knows who is")
+        #expect(try database.reconcileMemberships(orderID: order.id, authority: authority)
+                == MembershipReconciliation(mirrored: 0, removed: 0))
     }
 
     // MARK: Entitlement and members
