@@ -224,6 +224,38 @@ struct SignedFactsTests {
         #expect(try database.attestedAttachment(UUID(), authority: authority) == nil)
     }
 
+    @Test("A photo posted with an author names that party on both rows and its key row; the default names nobody")
+    func photoCarriesItsAuthor() throws {
+        let owner = makeDatabase()
+        let order = try recordOrder(in: owner)
+        let irina = party("_irina")
+        let irinaDevice = makeDatabase(keyStore: EphemeralKeyStore())
+        let posted = try irinaDevice.postPhotoMessage(orderID: order.id, data: Data([1, 2, 3]), authorRef: irina)
+        let attachmentID = try #require(posted.attachmentRef)
+        #expect(posted.authorRef == irina)
+        let irinaKey = try irinaDevice.signatory().keyID
+        #expect(try owner.participantKeys(orderID: order.id).first { $0.keyID == irinaKey }?.partyRef == irina,
+                "the post published Irina's key under her party")
+        let authority = TrustRowsTests.FakeAuthority(
+            localParty: me, owner: me, participants: [Member(ref: irina, canWrite: true, displayName: "Ирина")],
+            stamps: [irinaKey: irina], myKeyID: try owner.signatory().keyID)
+        let attachment = try #require(try owner.attestedAttachment(attachmentID, authority: authority))
+        #expect(attachment.value.authorRef == irina && attachment.verdict.isVerified)
+        #expect(attachment.verdict.author?.ref == irina && attachment.verdict.author?.displayName == "Ирина")
+        let message = try #require(try owner.attestedMessages(orderID: order.id, authority: authority).first)
+        #expect(message.value.authorRef == irina && message.verdict.author?.ref == irina)
+
+        // The default is today's post: no author on either row, still verified as this device's.
+        let database = makeDatabase()
+        let other = try recordOrder(in: database)
+        let unattributed = try database.postPhotoMessage(orderID: other.id, data: Data([4, 5]))
+        let localAuthority = try privateAuthority(database)
+        let unattributedID = try #require(unattributed.attachmentRef)
+        let row = try #require(try database.attestedAttachment(unattributedID, authority: localAuthority))
+        #expect(unattributed.authorRef == nil && row.value.authorRef == nil && row.verdict.isVerified)
+        #expect(try database.participantKeys(orderID: other.id).map(\.partyRef) == [nil])
+    }
+
     // MARK: Derived integrity
 
     @Test("The mirror agrees with the latest verified event, disagrees when rewritten, and recovers on a newer event")

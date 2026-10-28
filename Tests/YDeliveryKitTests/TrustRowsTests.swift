@@ -532,4 +532,21 @@ struct TrustRowsTests {
                     == MembershipReconciliation(mirrored: 0, removed: 0), "a private order has nobody to mirror")
         }
     }
+
+    @Test("Noting the user record keys the row by the container and derives the party under the provider word")
+    func noteLocalPartyComposesBothAuthorityStrings() throws {
+        let database = makeDatabase()
+        let authority = CloudKitIdentityAuthority(database: database, containerIdentifier: Self.container)
+        let noted = try authority.noteLocalParty(userRecordName: "_me")
+        #expect(noted == party("_me"), "the same reference every device derives for this user")
+        #expect(authority.localParty == noted)
+        let row = try #require(try database.localIdentity(
+            authority: CloudKitIdentityAuthority.authorityKey(containerIdentifier: Self.container)))
+        #expect(row.subject == "_me" && row.partyRef == noted)
+        #expect(try database.localIdentity(authority: CloudKitIdentityAuthority.authorityKind) == nil,
+                "the bare provider word derives; it never keys the row")
+        // A new iCloud account on this device replaces the row.
+        let next = try authority.noteLocalParty(userRecordName: "_next")
+        #expect(next == party("_next") && authority.localParty == next)
+    }
 }
