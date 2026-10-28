@@ -129,7 +129,9 @@ did; the default is `nil`, today's post. `CloudKitIdentityAuthority.noteLocalPar
 the container for its user record and notes it as the device's party, returning the
 `partyRef`: the party derived under the provider word `cloudkit`, the `localIdentity` row
 keyed by `cloudkit:<container>` — the two strings composed in one place, and the record
-name never leaving the authority.
+name never leaving the authority. `Verdict.author`, the party a verified or not-entitled
+row names, is public, so a consumer's view reads a writer without switching over every
+case.
 
 One consumer-facing honesty note: the substrate never destroys bytes. A malformed
 legacy file is rescued aside as `*.corrupted-<t>-<id>.json` before the store opens;

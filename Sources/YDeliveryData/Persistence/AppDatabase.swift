@@ -249,7 +249,12 @@ public final class AppDatabase: Sendable {
     /// converse — Xcode strips restricted entitlements from the signature (the
     /// slot reads empty for every build), so there is nothing left to inspect;
     /// they proceed and `start()` reports any residual failure.
-    public var iCloudEntitled: Bool {
+    public var iCloudEntitled: Bool { Self.iCloudEntitled(containerIdentifier: containerIdentifier) }
+
+    /// The same probe for any container this process may contact — the identity
+    /// authority asks it about the container it is about to touch, which its caller
+    /// names independently of the database's (review, PR #50).
+    static func iCloudEntitled(containerIdentifier: String) -> Bool {
         guard let url = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision")
         else {
             #if targetEnvironment(simulator)
