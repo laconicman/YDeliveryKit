@@ -249,7 +249,12 @@ public final class AppDatabase: Sendable {
     /// converse — Xcode strips restricted entitlements from the signature (the
     /// slot reads empty for every build), so there is nothing left to inspect;
     /// they proceed and `start()` reports any residual failure.
-    public var iCloudEntitled: Bool {
+    public var iCloudEntitled: Bool { Self.iCloudEntitled(containerIdentifier: containerIdentifier) }
+
+    /// The same probe for any container this process may contact — the identity
+    /// authority asks it about the container it is about to touch, which its caller
+    /// names independently of the database's (review, PR #50).
+    static func iCloudEntitled(containerIdentifier: String) -> Bool {
         guard let url = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision")
         else {
             #if targetEnvironment(simulator)
@@ -1444,11 +1449,14 @@ public final class AppDatabase: Sendable {
     /// land in one transaction, so the stream never shows a photo frame whose
     /// payload failed, and the same-order rule holds by construction rather
     /// than by check. Returns the posted message — its `attachmentRef` is the
-    /// payload's id, which is how the chat row finds its image.
+    /// payload's id, which is how the chat row finds its image. `authorRef` is
+    /// the posting device's party, as on ``postMessage(_:)``: stamped on both rows
+    /// and on the key row this post may publish; `nil` before the device knows
+    /// itself, when readers fall back to the key row's creator stamp.
     @discardableResult
     public func postPhotoMessage(
         orderID: Order.ID, data: Data, sentAt: Date = Date(),
-        caption: String? = nil, authorHint: String? = nil
+        caption: String? = nil, authorHint: String? = nil, authorRef: UUID? = nil
     ) throws -> OrderMessage {
         // The hash is computed before the transaction and travels with the row:
         // the asset itself is a CKAsset nobody signs, the hash is what binds it
@@ -1456,10 +1464,11 @@ public final class AppDatabase: Sendable {
         let attachment = OrderAttachment(
             orderID: orderID, caption: caption,
             byteSize: Int64(data.count), createdAt: sentAt,
-            authorHint: authorHint, dataHash: Self.dataHash(of: data))
+            authorHint: authorHint, dataHash: Self.dataHash(of: data), authorRef: authorRef)
         let message = OrderMessage(
             orderID: orderID, sentAt: sentAt, kind: OrderMessage.Kind.photo,
-            text: caption, attachmentRef: attachment.id, authorHint: authorHint)
+            text: caption, attachmentRef: attachment.id, authorHint: authorHint,
+            authorRef: authorRef)
         let signatory = try? signatory()
         try queue.write { db in
             let orderExists = try Row.fetchOne(db, sql: """

@@ -122,6 +122,17 @@ the store's orders, one per author per order: the sender's own experience, deriv
 read and never persisted — not a reputation, since other senders' ratings live in shares
 this device is not in.
 
+Adoption seams (0.5.5; the app's `Collaboration` → "Sign facts, derive state", rule 1):
+`postPhotoMessage` takes an `authorRef`, stamped on the attachment, its message and the
+key row the post may publish, so a photo names its author the way `postMessage` already
+did; the default is `nil`, today's post. `CloudKitIdentityAuthority.noteLocalParty()` asks
+the container for its user record and notes it as the device's party, returning the
+`partyRef`: the party derived under the provider word `cloudkit`, the `localIdentity` row
+keyed by `cloudkit:<container>` — the two strings composed in one place, and the record
+name never leaving the authority. `Verdict.author`, the party a verified or not-entitled
+row names, is public, so a consumer's view reads a writer without switching over every
+case.
+
 One consumer-facing honesty note: the substrate never destroys bytes. A malformed
 legacy file is rescued aside as `*.corrupted-<t>-<id>.json` before the store opens;
 a failed open is a stored error to render, never a crash and never silent-empty.

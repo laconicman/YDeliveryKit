@@ -118,8 +118,10 @@ struct PartyBook {
 }
 
 extension Verdict {
-    /// The party the verdict names, when it names one.
-    var author: Party? {
+    /// The party the verdict names, when it names one — a chat byline's source.
+    /// Public since 0.5.5: the consumer's reads hand verdicts to views, which need
+    /// the writer without switching over every case.
+    public var author: Party? {
         switch self {
         case .verified(let author), .notEntitled(let author): author
         default: nil

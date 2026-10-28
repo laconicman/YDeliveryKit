@@ -35,6 +35,36 @@ public struct CloudKitIdentityAuthority: IdentityAuthority {
             authority: Self.authorityKey(containerIdentifier: containerIdentifier)))?.partyRef
     }
 
+    /// Asks the container who this device's iCloud user is and notes that as the
+    /// local party, returning its `partyRef`. The fetch lives here so the record
+    /// name never leaves this type. A build without the iCloud entitlement for *this*
+    /// authority's container throws `SyncStartError.noICloudEntitlement` before
+    /// `CKContainer` is touched — it traps on contact, the probe
+    /// ``AppDatabase/startSync()`` runs first for the same reason, and the probe asks
+    /// about the container contacted here, not the database's, which a caller names
+    /// separately (review, PR #50); with no account it throws the container's error
+    /// (`CKError.notAuthenticated`). Either way a caller logs it and asks again on
+    /// a later launch.
+    @discardableResult
+    public func noteLocalParty() async throws -> UUID {
+        guard AppDatabase.iCloudEntitled(containerIdentifier: containerIdentifier) else {
+            throw AppDatabase.SyncStartError.noICloudEntitlement
+        }
+        let recordID = try await CKContainer(identifier: containerIdentifier).userRecordID()
+        return try noteLocalParty(userRecordName: recordID.recordName)
+    }
+
+    /// The note itself: the party derived under the provider word, the row keyed
+    /// by the container — the two authority strings, composed in one place so they
+    /// cannot be swapped.
+    func noteLocalParty(userRecordName: String) throws -> UUID {
+        let partyRef = UUID.partyRef(authority: Self.authorityKind, subject: userRecordName)
+        try database.noteLocalIdentity(
+            authority: Self.authorityKey(containerIdentifier: containerIdentifier),
+            subject: userRecordName, partyRef: partyRef)
+        return partyRef
+    }
+
     public func binding(of key: ParticipantKey) -> KeyBinding {
         let stamp = (try? database.creatorRecordName(
             recordPrimaryKey: key.id.uuidString.lowercased(),
